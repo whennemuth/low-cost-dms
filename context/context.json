@@ -6,18 +6,15 @@
     "Tags": {
       "Service": "research-administration",
       "Function": "kuali",
-      "Landscape": "stg"
+      "Landscape": "stg2"
     }
   },
   "serverless": true,
-  "scheduleRateHours": 24,
   "scheduledRunRetryOnFailure": true,
-  "scheduledRunAbortIfBeyondRedoLogRetention": true,
-  "scheduledRunDurationMinutes": 45,
-  "publicSubnetIds": [
-  	"subnet-07afd7c2e54376dd0",
-  	"subnet-03034a40da92d6d08"
-  ],
+  "replicationScheduleCronExpression": "0 0 2 * * *",
+  "replicationScheduleCronTimezone": "America/New_York",
+  "durationForFullLoadMinutes": 120,
+  "durationForCdcMinutes": 60,
 
   "oracleHost": "stg.db.kualitest.research.bu.edu",
   "oraclePort": 1521,
@@ -26,8 +23,7 @@
   "oracleSecretName": "kuali/stg/kuali-oracle-rds-app-password",
   "oracleSecurityGroupId": "sg-0b8b04f9cf045f812",
   "oracleVpcId": "vpc-0290de1785982a52f",
-  "oracleLargestLobKB": 180000,
-  "oracleRedoLogRetentionHours": 48,
+  "oracleLargestLobKB": 7000,
   "oracleSubnetIds": [
     "subnet-0d4acd358fba71d20",
     "subnet-08afdf870ee85d511"
@@ -36,15 +32,14 @@
     "KCOEUS"
   ],
   "oracleTestTables": [
-    { "schemaName": "KCOEUS", "tableNames": [ "DMS_SMOKE_TEST" ] }
+    { "schemaName": "KCOEUS", "tableNames": [ "DMS_SMOKE_TEST2" ] }
   ],
 
-  
+  "postgresInstanceSize": "small",
   "postgresPort": 5432,
   "postgresDbName": "kuali_db",
   "postgresSchema": "kl_user",
   "postgresPassword": "",
-  "postgresInstanceSize": "small",
   "postgresSecretName": "kuali/stg/kuali-postgres-credentials",
   "postgresInstanceIngress": [
     { "cidr": "168.122.78.128/28", "description": "vpn.bu.edu/dbreport Off Campus 1" },

@@ -1,4 +1,4 @@
-import { DatabaseMigrationService, DescribeReplicationsCommandInput, DescribeReplicationsCommandOutput, MigrationTypeValue, Replication } from "@aws-sdk/client-database-migration-service";
+import {  DatabaseMigrationService, DeleteReplicationConfigCommandInput, DescribeReplicationsCommandInput, DescribeReplicationsCommandOutput, MigrationTypeValue, Replication } from "@aws-sdk/client-database-migration-service";
 
 export enum TASK_TYPE {
   START_REPLICATION='start-replication',
@@ -40,10 +40,7 @@ export enum STOP_REASON {
 
 export type ReplicationParms = {
   configArn: string;
-  neverAbort: boolean;
   ignoreLastError: boolean;
-  repType: MigrationTypeValue;
-  fullLoadConfigArn?: string;
 };
 
 /**
@@ -52,7 +49,6 @@ export type ReplicationParms = {
 export class DmsReplication {
   private _parms: ReplicationParms;
   private _replication: Replication|undefined;
-  private _validationMsg: string|undefined;
 
   private constructor(replication:Replication|undefined, parms: ReplicationParms) {
     this._replication = replication;
@@ -60,21 +56,21 @@ export class DmsReplication {
   }
 
   public get isBusy(): boolean {
-    const { Status } = this._replication || {};
+    const { status } = this;
     return (
-      Status === TASK_STATUS.STARTING || 
-      Status === TASK_STATUS.RUNNING ||
-      Status === TASK_STATUS.CREATING ||
-      Status === TASK_STATUS.STOPPING ||
-      Status === TASK_STATUS.DELETING ||
-      Status === TASK_STATUS.MODIFYING ||
-      Status === TASK_STATUS.MOVING
+      status === TASK_STATUS.STARTING || 
+      status === TASK_STATUS.RUNNING ||
+      status === TASK_STATUS.CREATING ||
+      status === TASK_STATUS.STOPPING ||
+      status === TASK_STATUS.DELETING ||
+      status === TASK_STATUS.MODIFYING ||
+      status === TASK_STATUS.MOVING
     );
   }
 
   public get hasFailed(): boolean {
-    const { _replication: { Status, StopReason } = {}, isBusy } = this;
-    if(Status === TASK_STATUS.FAILED) return true;
+    const { status, _replication: { StopReason } = {}, isBusy } = this;
+    if(status === TASK_STATUS.FAILED) return true;
     if(isBusy) return false;
     if(StopReason?.includes(STOP_REASON.FATAL_ERROR)) return true;
     if(StopReason?.includes(STOP_REASON.RECOVERABLE_ERROR)) return true;
@@ -87,14 +83,14 @@ export class DmsReplication {
   };
 
   public get hasSucceeded(): boolean {
-    const { _replication: { Status, StopReason } = {}, isBusy, replicationType, hasFailed } = this;
+    const { _replication: { StopReason } = {}, isBusy, replicationType, hasFailed, status } = this;
     const { FULL_LOAD, FULL_LOAD_AND_CDC } = MigrationTypeValue;
     if(hasFailed) return false;
     if(isBusy) return false;
-    if(Status === TASK_STATUS.STOPPED && replicationType === FULL_LOAD) {
+    if(status === TASK_STATUS.STOPPED && replicationType === FULL_LOAD) {
       if(StopReason === STOP_REASON.FULL_LOAD_ONLY_FINISHED) return true;
     }
-    if(Status === TASK_STATUS.STOPPED && replicationType === FULL_LOAD_AND_CDC) {
+    if(status === TASK_STATUS.STOPPED && replicationType === FULL_LOAD_AND_CDC) {
       if(StopReason === STOP_REASON.FULL_LOAD_ONLY_FINISHED) return true;
       if(StopReason === STOP_REASON.STOPPED_AFTER_FULL_LOAD) return true;
       if(StopReason === STOP_REASON.STOPPED_AFTER_CACHED_EVENTS) return true;
@@ -102,19 +98,13 @@ export class DmsReplication {
     return false;
   }
 
-  public get invalidState(): boolean {
-    const { isBusy, hasFailed, hasSucceeded } = this;
-    if ( ! isBusy && ! hasFailed && ! hasSucceeded) return true;
-    return false;
-  }
-
-  public get isFirstReplication(): boolean {
-    const { ReplicationStats: { StartDate, StopDate } = {}, StopReason, Status } = this._replication || {};
+  public get hasNeverRun(): boolean {
+    const { status, _replication: { ReplicationStats: { StartDate, StopDate } = {}, StopReason } = {} } = this;
     if(StartDate) return false;
     if(StopDate) return false;
     if(StopReason) return false;
-    if(Status !== TASK_STATUS.CREATED) {
-      console.warn(`Replication status is ${Status}, there is no evidence of ever having run`);
+    if(status !== TASK_STATUS.CREATED) {
+      console.warn(`Replication status is ${status}, but there is no evidence of ever having run`);
     }
     return true;
   };
@@ -137,42 +127,38 @@ export class DmsReplication {
   public get parms(): ReplicationParms {
     return this._parms;
   }
-
+  public get ignoreFailures(): boolean {
+    return this._parms.ignoreLastError;
+  }
+  public get failureMessage(): string {
+    const { StopReason='unknown', FailureMessages=[] } = this._replication || {};
+    return JSON.stringify({ StopReason, FailureMessages });
+  }
   /**
-   * Make sure all the needed properties are present and they have values that don't suggest obvious problems.
+   * Get the time that a replication last stopped.
+   * @param replication 
+   * @returns 
    */
-  public get isValid(): boolean {
-    const { 
-      _parms: { ignoreLastError, neverAbort, repType }, _replication: replication, 
-      _replication: { ReplicationType } = {}, 
-      arn, replicationType, hasFailed, invalidState, isBusy, hasSucceeded, status
-    } = this;
-   
-    if( ! replication) {
-      this._validationMsg = `No replication found for ${arn}`;
-    }
-    // False if the replication is not a CDC only type
-    if(ReplicationType !== repType) {
-      this._validationMsg = `Invalid replication type: ${replicationType || 'unknown'}`;
-    }
-    // False if the replication status is incompatible with starting
-    else if( ! hasFailed || isBusy) {
-      this._validationMsg = `Invalid replication status: ${status || 'unknown'}`;
-    }
-    // Bail out if the last replication failed and we are not ignoring errors.
-    else if(hasFailed && ! ignoreLastError && ! neverAbort) {
-      this._validationMsg = `${arn} failed during its most recent run, and not configured to ignore errors`;
-    }
-    else if(invalidState) {
-      this._validationMsg = `Replication is in an invalid state: ${JSON.stringify({
-        isBusy, hasFailed, hasSucceeded
-      }, null, 2)}`;
-    }
-    return ! this._validationMsg;
+  public get stoppedTime(): Date | undefined {
+    const { replication: { ReplicationLastStopTime, ReplicationStats: { StopDate } = {} } = {} } = this;
+    if( ! ReplicationLastStopTime && ! StopDate) return undefined;
+    if( ! ReplicationLastStopTime ) return new Date(StopDate!);
+    if( ! StopDate ) return new Date(ReplicationLastStopTime);
+    const date1 = new Date(StopDate!);
+    const date2 = new Date(ReplicationLastStopTime);
+    return date1 < date2 ? date1 : date2; // Return the earlier of the two dates (will probably be StopDate)
   }
 
-  public get validationMsgText(): string | undefined {
-    return this._validationMsg;
+  /**
+   * The only way to delete a serverless replication (including crucially those that remain in a costly 48 hour 
+   * provisioned state) is to delete its configuration. It will be recreated later as needed.
+   * @param replicationConfigArn 
+   */
+  public deleteConfiguration = async (): Promise<void> => {
+    const dms = new DatabaseMigrationService();
+    await dms.deleteReplicationConfig({
+      ReplicationConfigArn: this.arn
+    } as DeleteReplicationConfigCommandInput);
   }
 
   /**
@@ -189,16 +175,14 @@ export class DmsReplication {
       Filters: [{ Name: 'replication-config-arn', Values: [ configArn ] }],
     } as DescribeReplicationsCommandInput) as DescribeReplicationsCommandOutput;
 
+    const { Replications = [] } = output || {};
+
     // Bail out if the lookup failed
-    const replication = output.Replications?.[0];
-    if ( ! replication ) {
-      throw new Error(`No replication config found for ${configArn}`);
+    if(!Replications.length) {
+      console.log('No replications found');
+      return new DmsReplication(undefined, parms);
     }
-
-    // Log the replication.
-    console.log(`${configArn} found as:`, JSON.stringify(replication, null, 2));
-
-    return new DmsReplication(replication, parms);
+    return new DmsReplication(Replications[0], parms);
   }
 }
 
@@ -208,13 +192,15 @@ if(args.length > 1 && args[1].replace(/\\/g, '/').endsWith('lib/lambda/Replicati
 
   (async () => {
     const replication = await DmsReplication.getInstance({
-      configArn: 'arn:aws:dms:us-east-1:770203350335:replication-config:K7YGWZDYPBFYDK2I6JBHYYDKEM',
-      // configArn: 'arn:aws:dms:us-east-1:770203350335:replication-config:XGHFY3MXBBAA7KRH4U4QYZDCGI',
-      ignoreLastError: true,
-      neverAbort: true,
-      repType: MigrationTypeValue.CDC,
+      configArn: 'arn:aws:dms:us-east-1:770203350335:replication-config:C6CYM7FEFNAHJPKC6HGHVDUCGE',
+      ignoreLastError: true
     });
 
-    console.log(JSON.stringify(replication.replication, null, 2));
+    if( ! replication) {
+      console.log('No replication found');
+      return;
+    }
+
+    console.log(JSON.stringify(replication!.replication, null, 2));
   })();
 }

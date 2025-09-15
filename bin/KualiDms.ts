@@ -4,7 +4,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Context } from '../context/context.ts';
-import { PostgresTarget, RdsInstanceProps } from '../lib/PostgresTarget.ts';
+import { PostgresTarget } from '../lib/PostgresTarget.ts';
 import { VpcRole } from '../lib/Role.ts';
 import { KualiDmsStack } from '../lib/Stack.ts';
 

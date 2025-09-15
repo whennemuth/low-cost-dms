@@ -7,10 +7,10 @@ export class Context implements IContext {
   public stack:StackParameters;
   public serverless: boolean;
   public scheduledRunRetryOnFailure?: boolean;
-  public scheduledRunAbortIfBeyondRedoLogRetention?: boolean;
-  public scheduledRunDurationMinutes?: number;
-  public scheduleRateHours?: number;
-  public publicSubnetIds?: string[];
+  public replicationScheduleCronExpression?: string; // A cron expression for scheduling the replication tasks
+  public replicationScheduleCronTimezone?: string; // Timezone for the cron expression, defaults to UTC
+  public durationForFullLoadMinutes?: number; // Duration to run a full-load replication before switching to CDC
+  public durationForCdcMinutes?: number; // Duration to run a CDC replication before stopping it
 
   /* ----------------- ORACLE SOURCE ----------------- */
   // Connection
@@ -23,7 +23,6 @@ export class Context implements IContext {
   public oracleSecurityGroupId?: string;
   public oracleVpcId?: string;
   public oracleSubnetIds?: string[];
-  public oracleRedoLogRetentionHours?: number | undefined;
   // Replication configuration
   public oracleTestTables?: DatabaseTable[];
   public oracleSourceSchemas: string[];
@@ -53,12 +52,12 @@ export class Context implements IContext {
       stack: { Id, Account, Region, Tags: { Service, Function, Landscape } = {} } = {},
       oracleHost, oraclePort, oracleUser, oraclePassword, oracleSecretName, oracleSecurityGroupId,
       oracleVpcId, oracleSubnetIds, oracleTestTables, oracleSourceSchemas, oracleLargestLobKB, 
-      oracleRedoLogRetentionHours, scheduledRunAbortIfBeyondRedoLogRetention, scheduledRunDurationMinutes,
 
       postgresDbName, postgresHost, postgresPort, postgresSchema, postgresPassword, 
-      postgresSecretName, postgresInstanceSize, postgresInstanceIngress, publicSubnetIds,
+      postgresSecretName, postgresInstanceSize, postgresInstanceIngress,
 
-      scheduleRateHours, scheduledRunRetryOnFailure=true, serverless=true
+      replicationScheduleCronExpression, replicationScheduleCronTimezone, scheduledRunRetryOnFailure=true, serverless=true,
+      durationForFullLoadMinutes, durationForCdcMinutes
     } = context;
 
     this.stack = { Id, Account, Region, Tags: { Service, Function, Landscape }, prefix: () => {
@@ -76,7 +75,6 @@ export class Context implements IContext {
     this.oracleTestTables = oracleTestTables;
     this.oracleSourceSchemas = oracleSourceSchemas;
     this.oracleLargestLobKB = oracleLargestLobKB;
-    this.oracleRedoLogRetentionHours = oracleRedoLogRetentionHours;
 
     this.postgresDbName = postgresDbName;
     this.postgresHost = postgresHost;
@@ -88,10 +86,10 @@ export class Context implements IContext {
     this.postgresInstanceIngress = postgresInstanceIngress;
 
     this.serverless = serverless;
-    this.scheduleRateHours = scheduleRateHours;
+    this.replicationScheduleCronExpression = replicationScheduleCronExpression;
+    this.replicationScheduleCronTimezone = replicationScheduleCronTimezone;
     this.scheduledRunRetryOnFailure = scheduledRunRetryOnFailure;
-    this.scheduledRunAbortIfBeyondRedoLogRetention = scheduledRunAbortIfBeyondRedoLogRetention;
-    this.scheduledRunDurationMinutes = scheduledRunDurationMinutes;
-    this.publicSubnetIds = publicSubnetIds;
+    this.durationForFullLoadMinutes = durationForFullLoadMinutes;
+    this.durationForCdcMinutes = durationForCdcMinutes;
   }
 }

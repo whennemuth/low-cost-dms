@@ -50,7 +50,7 @@ export class DelayedLambdaExecution implements DelayedExecution {
         return;
       }
 
-      const groupName = `${PREFIX}-scheduler-group`;
+      const groupName = `${PREFIX}-schedules`;
       const scheduleExpression = timer.getCronExpression();
 
       // Create the event bridge schedule
@@ -154,7 +154,7 @@ if(args.length > 2 && args[2].replace(/\\/g, '/').endsWith('lib/lambda/timer/Del
       // Start an egg timer that "delegates" the countdown to some other entity - in this case, event bridge.
       // Thus the egg timer returns immediately and the real egg timer is an event bridge schedule.
       (async () => {
-        const context:IContext = await require('../../../../contexts/context.json');
+        const context:IContext = await require('../../../context/context.json');
         const { stack: { Id, Account, Region, prefix=()=>'undefined' } = {} } = context;
         process.env.ACCOUNT = Account;
         process.env.REGION = Region;

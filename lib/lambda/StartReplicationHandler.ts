@@ -1,128 +1,129 @@
-import { CreateReplicationConfigCommandInput, DatabaseMigrationService, StartReplicationCommandInput, StartReplicationTaskTypeValue } from "@aws-sdk/client-database-migration-service";
-import { DelayedLambdaExecution, PostExecution, ScheduledLambdaInput } from "./timer/DelayedExecution";
-import { getFutureDateString, log, TimeUnit } from "./Utils";
-import { v4 as uuidv4 } from 'uuid';
-import { ReplicationType } from "../Tasks";
-import { ServerlessReplicationSettings } from "../ReplicationSetting";
-import { TableMapping } from "../TableMappings";
-import { asServerTimestamp } from "./Utils";
-import { EggTimer, PeriodType } from "./timer/EggTimer";
-import { StopReplicationHandlerInput } from "./StopReplicationHandler";
-import { DatabaseTable } from "../../context/IContext";
+import { MigrationTypeValue, StartReplicationTaskTypeValue } from "@aws-sdk/client-database-migration-service";
+import { IContext } from "../../context/IContext";
+import { getReplicationCreateEnvironmentVariables, getReplicationStartEnvironmentVariables } from "./ReplicationEnvironment";
+import { ReplicationToCreate } from "./ReplicationToCreate";
+import { ReplicationToStart, ReplicationToStartRunParms } from "./ReplicationToStart";
+import { PostExecution, ScheduledLambdaInput } from "./timer/DelayedExecution";
+import { asServerTimestamp, getFutureDateString, log, lookupDmsEndpoinArn, lookupSecurityGroupId, lookupVpcAvailabilityZones, TimeUnit } from "./Utils";
 
 export type StartReplicationHandlerInput = {
-  CdcStartPosition: string;
-  replicationDurationMinutes: number;
+  ReplicationType: MigrationTypeValue;
+  StartReplicationType: StartReplicationTaskTypeValue;
+  CdcStartPosition?: string;
+  CdcStopTime?: string;
   isSmokeTest?: boolean;
+  skipReplicationStart?: boolean;
+  skipDeletionSchedule?: boolean;
 };
 
-type environmentParms = {
-  ignoreLastError: boolean,
-  sourceDbRedoLogRetentionHours: number,
-  abortIfBeyondRedoLogRetention: boolean,
-  neverAbort: boolean,
-  ReplicationSubnetGroupId: string,
-  replicationAvailabilityZone: string,
-  vpcSecurityGroupId: string,
-  SourceEndpointArn: string,
-  TargetEndpointArn: string,
-  largestSourceLobKB: number,
-  sourceDbSchemas: string[],
-  sourceDbTestTables: DatabaseTable[],
-  stopReplicationFunctionArn: string,
-  replicationScheduleRateHours: number
-}
-
+/**
+ * This is a lambda function handler that:
+ *   1) Creates and starts a new CDC replication configuration
+ *   2) Schedules the stop and deletion of the replication after a specified duration
+ * @param event
+ */
 export const handler = async (event:ScheduledLambdaInput):Promise<any> => {
   const { lambdaInput, groupName, scheduleName } = event;
-  const { CdcStartPosition, replicationDurationMinutes=60, isSmokeTest=false } = lambdaInput as StartReplicationHandlerInput;
-  const {
-    ignoreLastError, sourceDbRedoLogRetentionHours, abortIfBeyondRedoLogRetention, neverAbort,
-    ReplicationSubnetGroupId, replicationAvailabilityZone:AvailabilityZone, vpcSecurityGroupId,
-    SourceEndpointArn, TargetEndpointArn, largestSourceLobKB, replicationScheduleRateHours,
-    sourceDbSchemas, sourceDbTestTables, stopReplicationFunctionArn
-  } = getEnvironmentParms();
 
   try {
     log(event, 'Processing with the following event');
 
-    const dms = new DatabaseMigrationService();
-    const ReplicationConfigIdentifier = `start-replication-${uuidv4()}`;
-    const ReplicationSettings = Object.assign({}, ServerlessReplicationSettings);
-    if(largestSourceLobKB > 0) {
-      ReplicationSettings.TargetMetadata = {
-        ...ReplicationSettings.TargetMetadata,
-        LobMaxSize: largestSourceLobKB
-      };
+    const startEnvironmentVariables = getReplicationStartEnvironmentVariables();
+
+    const { 
+      ACTIVE, STOP_REPLICATION_FUNCTION_ARN, REPLICATION_SCHEDULE_CRON_EXPRESSION,
+      REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES, REPLICATION_DURATION_FOR_CDC_MINUTES
+    } = process.env;
+
+    if(`${ACTIVE}` === 'false') {
+      console.log('The lambda is not active. Exiting without action.');
+      return;
     }
 
-    // Define the table mapping
-    let tableMapping:TableMapping;
-    if(isSmokeTest) {
-      if(sourceDbTestTables.length == 0) {
-        throw new Error('No test tables specified for smoke test');
+    if( ! /^\d+$/.test(`${REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES}`)) {
+      throw new Error('REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES must be a positive integer');
+    }
+    if( ! /^\d+$/.test(`${REPLICATION_DURATION_FOR_CDC_MINUTES}`)) {
+      throw new Error('REPLICATION_DURATION_FOR_CDC_MINUTES must be a positive integer');
+    }
+    if( ! STOP_REPLICATION_FUNCTION_ARN) {
+      throw new Error('STOP_REPLICATION_FUNCTION_ARN is not defined');
+    }
+
+    let { 
+      ReplicationType, StartReplicationType, CdcStartPosition, CdcStopTime, isSmokeTest=false,
+      skipReplicationStart=false, skipDeletionSchedule=false 
+    } = lambdaInput as StartReplicationHandlerInput;
+
+    // Instantiate replication creation class
+    const replicationToCreate =  new ReplicationToCreate({ 
+      isSmokeTest, createEnvironmentVariables:getReplicationCreateEnvironmentVariables() 
+    });
+
+    // Non-CDC replications are not supported here.
+    if(ReplicationType === MigrationTypeValue.FULL_LOAD) {
+      throw new Error('Only CDC replications can be started with this function');
+    }
+
+    // Instantiate replication start class
+    const replicationToStart = new ReplicationToStart({ 
+      isSmokeTest: isSmokeTest, suffix:replicationToCreate.suffix, startEnvironmentVariables
+    });
+
+    // Validate environment variables
+    if( ! replicationToCreate.validCreateEnvironmentVariables) {
+      throw new Error('Invalid replication creation environment variables');
+    }
+    if( ! replicationToStart.validStartEnvironmentVariables) {
+      throw new Error('Invalid replication start environment variables');
+    }
+
+    // Create a new replication configuration.
+    const ReplicationConfigArn = await replicationToCreate.create(ReplicationType);
+
+    // Bail out if configured to only create the replication.
+    if(skipReplicationStart) {
+      console.log('Skipping the start of the replication as requested.');
+      return;
+    }
+
+    // Construct the parameters to start a replication.
+    let minutesToAdd = 0;
+    if( ! CdcStopTime) {
+      switch(ReplicationType) {
+        case MigrationTypeValue.CDC:
+          minutesToAdd = parseInt(REPLICATION_DURATION_FOR_CDC_MINUTES!);
+          CdcStopTime = getFutureDateString(minutesToAdd, TimeUnit.MINUTE);
+          break;
+        case MigrationTypeValue.FULL_LOAD_AND_CDC:
+          minutesToAdd = parseInt(REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES!);
+          CdcStopTime = getFutureDateString(minutesToAdd, TimeUnit.MINUTE);
+          break;
       }
-      tableMapping = TableMapping
-        .includeTestTables(sourceDbTestTables)
-        .lowerCaseTargetTableNames();
     }
-    else {
-      if(sourceDbSchemas.length == 0) {
-        throw new Error('No source schemas specified');
-      }
-      tableMapping = new TableMapping()
-        .includeSchemas(sourceDbSchemas)
-        .lowerCaseTargetTableNames()
-    }
-    
-    // Create the replication configuration
-    const output = await dms.createReplicationConfig({
-      ReplicationConfigIdentifier,
-      ReplicationType: ReplicationType.CDC,
-      SourceEndpointArn,
-      TargetEndpointArn,
-      ReplicationSettings,
-      TableMappings: tableMapping.toJSON(),
-      ComputeConfig: {
-        ReplicationSubnetGroupId,
-        MultiAZ: false,
-        MaxCapacityUnits: 8,
-        MinCapacityUnits: 2,
-        AvailabilityZone,
-        VpcSecurityGroupIds: [ vpcSecurityGroupId ]
-      }
-    } as CreateReplicationConfigCommandInput);
-
-    const { ReplicationConfig: { ReplicationConfigArn } = {}} = output;
-    if ( ! ReplicationConfigArn ) {
-      throw new Error('Failed to create the replication configuration');
-    }
-
-    // Get the stop time for the replication
-    const CdcStopPosition = asServerTimestamp(getFutureDateString(replicationDurationMinutes, TimeUnit.MINUTE));
-
-    // Start a replication based on the configuration
-    await dms.startReplication({
+    const startParms = {
+      groupName,
+      scheduleName,      
+      ReplicationType,
       ReplicationConfigArn,
-      CdcStartPosition,
-      CdcStopPosition,
-      StartReplicationType: StartReplicationTaskTypeValue.START_REPLICATION,      
-    } as StartReplicationCommandInput);
+      CdcStartPosition: CdcStartPosition!,
+      CdcStopPosition: asServerTimestamp(CdcStopTime),
+      StartReplicationType
+    } as ReplicationToStartRunParms;
 
-    // Create a delayed execution that targets a lambda that will delete the replication started above.
-    // It should be in a stopped state by the time this runs.
-    const delayedTestExecution = new DelayedLambdaExecution(stopReplicationFunctionArn, {
-      scheduleName: `stop-replication-${uuidv4()}`, groupName, lambdaInput: {
-        ReplicationConfigArn,
-        LastCdcStartPosition: CdcStartPosition,
-        LastCdcStopPosition: CdcStopPosition,
-        LastReplicationDurationMinutes: replicationDurationMinutes,
-        wasSmokeTest: isSmokeTest
-      } as StopReplicationHandlerInput
-    } as ScheduledLambdaInput);
-    const timer = EggTimer.getInstanceSetFor(replicationScheduleRateHours, PeriodType.HOURS);
-    await delayedTestExecution.startCountdown(timer, 'testing-one-two-three', 'Testing one two three');
-    
+    // Start a replication based on the newly created configuration.
+    await replicationToStart.start(startParms);
+
+    // Bail out if configured to skip scheduling the deletion of the replication.
+    if(skipDeletionSchedule) {
+      console.log('Skipping the scheduling of the replication deletion as requested.');
+      return;
+    }
+
+    // Schedule the deletion of the replication after it has run for the specified duration.
+    await replicationToStart.scheduleDeletion(startParms);
+
+    log(`Successfully started replication: ${ReplicationConfigArn} to run for ${minutesToAdd} minutes until ${CdcStopTime}`);
   }
   catch(e:any) {    
     log(e);
@@ -134,61 +135,59 @@ export const handler = async (event:ScheduledLambdaInput):Promise<any> => {
 };  
 
 
-const getEnvironmentParms = ():environmentParms => {
-  const {
-    IGNORE_LAST_ERROR,
-    SOURCE_DB_REDO_LOG_RETENTION_HOURS,
-    ABORT_IF_BEYOND_REDO_LOG_RETENTION,
-    NEVER_ABORT,
-    REPLICATION_SUBNET_GROUP_ID,
-    REPLICATION_AVAILABILITY_ZONE,
-    VPC_SECURITY_GROUP_ID,
-    SOURCE_ENDPOINT_ARN,
-    TARGET_ENDPOINT_ARN,
-    LARGEST_SOURCE_LOB_KB,
-    SOURCE_SCHEMAS,
-    SOURCE_TEST_TABLES,
-    STOP_REPLICATION_FUNCTION_ARN,
-    REPLICATION_SCHEDULE_RATE_HOURS
-  } = process.env;
 
-  
-  if( ! STOP_REPLICATION_FUNCTION_ARN) {
-    throw new Error('Missing STOP_REPLICATION_FUNCTION_ARN environment variable');
-  }
-  if( ! REPLICATION_SUBNET_GROUP_ID) {
-    throw new Error('Missing REPLICATION_SUBNET_GROUP_ID environment variable');
-  }
-  if( ! REPLICATION_AVAILABILITY_ZONE) {
-    throw new Error('Missing REPLICATION_AVAILABILITY_ZONE environment variable');
-  }
-  if( ! VPC_SECURITY_GROUP_ID) {
-    throw new Error('Missing VPC_SECURITY_GROUP_ID environment variable');
-  }
-  if( ! SOURCE_ENDPOINT_ARN) {
-    throw new Error('Missing SOURCE_ENDPOINT_ARN environment variable');
-  }
-  if( ! TARGET_ENDPOINT_ARN) {
-    throw new Error('Missing TARGET_ENDPOINT_ARN environment variable');
-  }
-  if( ! SOURCE_DB_REDO_LOG_RETENTION_HOURS) {
-    throw new Error('Missing SOURCE_DB_REDO_LOG_RETENTION_HOURS environment variable');
-  }
 
-  return {
-    ignoreLastError: IGNORE_LAST_ERROR ? IGNORE_LAST_ERROR.toLowerCase() === 'true' : false,
-    sourceDbRedoLogRetentionHours: SOURCE_DB_REDO_LOG_RETENTION_HOURS ? parseInt(SOURCE_DB_REDO_LOG_RETENTION_HOURS) : 0,
-    abortIfBeyondRedoLogRetention: ABORT_IF_BEYOND_REDO_LOG_RETENTION ? ABORT_IF_BEYOND_REDO_LOG_RETENTION.toLowerCase() === 'true' : true,
-    neverAbort: NEVER_ABORT ? NEVER_ABORT.toLowerCase() === 'true' : false,
-    ReplicationSubnetGroupId: REPLICATION_SUBNET_GROUP_ID!,
-    replicationAvailabilityZone: REPLICATION_AVAILABILITY_ZONE!,
-    vpcSecurityGroupId: VPC_SECURITY_GROUP_ID!,
-    SourceEndpointArn: SOURCE_ENDPOINT_ARN!,
-    TargetEndpointArn: TARGET_ENDPOINT_ARN!,
-    largestSourceLobKB: LARGEST_SOURCE_LOB_KB ? parseInt(LARGEST_SOURCE_LOB_KB) : 0,
-    sourceDbSchemas: SOURCE_SCHEMAS ? JSON.parse(SOURCE_SCHEMAS) : [],
-    sourceDbTestTables: SOURCE_TEST_TABLES ? JSON.parse(SOURCE_TEST_TABLES) : [],
-    stopReplicationFunctionArn: STOP_REPLICATION_FUNCTION_ARN!,
-    replicationScheduleRateHours: REPLICATION_SCHEDULE_RATE_HOURS ? parseInt(REPLICATION_SCHEDULE_RATE_HOURS) : 24
-  };
+/**
+ * RUN MANUALLY:
+ */
+const { argv:args } = process;
+if(args.length > 1 && args[1].replace(/\\/g, '/').endsWith('lib/lambda/StartReplicationHandler.ts')) {
+
+  (async () => {
+    const context:IContext = await require('../../context/context.json');
+    const { 
+      stack: { Account, Region, Tags: { Landscape } = {} } = {},
+      scheduledRunRetryOnFailure=false,
+      oracleLargestLobKB=7000,
+      replicationScheduleCronExpression='0 0 2 * * *',
+      oracleTestTables,
+      oracleSourceSchemas,
+      oracleVpcId,
+      durationForFullLoadMinutes,
+      durationForCdcMinutes
+    } = context;
+    const prefix = () => `kuali-dms-${Landscape}`;
+
+    // Needed to create the replication config
+    process.env.ACTIVE = 'true';
+    process.env.PREFIX = `${prefix()}`;
+    process.env.SOURCE_ENDPOINT_ARN = await lookupDmsEndpoinArn(`${prefix()}-source-endpoint`);
+    process.env.TARGET_ENDPOINT_ARN = await lookupDmsEndpoinArn(`${prefix()}-target-endpoint`);
+    process.env.REPLICATION_SUBNET_GROUP_ID = `${prefix()}-subnet-group`;
+    process.env.REPLICATION_AVAILABILITY_ZONE = (await lookupVpcAvailabilityZones(`${oracleVpcId}`))[0];
+    process.env.VPC_SECURITY_GROUP_ID = await lookupSecurityGroupId(`${prefix()}-vpc-sg`);
+    process.env.SOURCE_TEST_TABLES = JSON.stringify(oracleTestTables);
+    process.env.SOURCE_DB_SCHEMAS = JSON.stringify(oracleSourceSchemas);
+    process.env.LARGEST_SOURCE_LOB_KB = `${oracleLargestLobKB}`;
+    process.env.REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES = `${durationForFullLoadMinutes ?? '120'}`;
+    process.env.REPLICATION_DURATION_FOR_CDC_MINUTES = `${durationForCdcMinutes ?? '60'}`;
+
+    // Needed to start the replication config, schedule its stop, and cleanup
+    process.env.IGNORE_LAST_ERROR = scheduledRunRetryOnFailure ? 'true' : 'false';
+    process.env.REPLICATION_SCHEDULE_CRON_EXPRESSION = replicationScheduleCronExpression ?? '0 0 2 * * *';
+    process.env.STOP_REPLICATION_FUNCTION_ARN = `arn:aws:lambda:${Region}:${Account}:function:${prefix()}-stop-replication-task`;
+
+    await handler({
+      groupName: `${prefix()}-schedules`,
+      scheduleName: 'test-start-replication-smoketest',
+      lambdaInput: {
+        ReplicationType: MigrationTypeValue.CDC,
+        StartReplicationType: StartReplicationTaskTypeValue.START_REPLICATION,
+        isSmokeTest: true,
+        // CdcStopTime: getFutureDateString(20, TimeUnit.MINUTE),
+        // CdcStartPosition: new Date().toISOString(),
+      } as StartReplicationHandlerInput
+    });
+    console.log('Done');
+  })();
 }

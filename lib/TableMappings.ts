@@ -171,6 +171,11 @@ export class TableMapping {
     return JSON.stringify(this.toJSON(), null, 2);
   }
 
+  public toFlatString = (): string => {
+    return JSON.stringify(this.toJSON());
+  }
+
+
   public static includeTestTables = (testTables: DatabaseTable[] = [], ruleName?: string): TableMapping => {
     if(testTables.length === 0) {
       throw new Error('No test tables provided for TableMapping.includeTestTables()');

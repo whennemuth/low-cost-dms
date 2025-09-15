@@ -10,14 +10,13 @@ export class DmsVpc extends Construct {
   private _vpc:IVpc;
   private _sg:SecurityGroup;
   private _privateSubnetIds:string[] = [];
-  private _publicSubnetIds:string[] = [];
 
   constructor(scope: Construct, id: string, context:IContext) {
     super(scope, id);
 
     let { 
       stack: { prefix=()=>'undefined' } = {}, 
-      oracleVpcId, oracleSubnetIds:privateSubnetIds=[], publicSubnetIds=[]
+      oracleVpcId, oracleSubnetIds:privateSubnetIds=[]
     } = context;
 
     /**
@@ -45,7 +44,6 @@ export class DmsVpc extends Construct {
     if(oracleVpcId) {
       this._vpc = Vpc.fromLookup(this, `${prefix()}-${id}-vpc`, { vpcId: oracleVpcId });
       this.privateSubnetIds.push(...getSubnetIds(privateSubnetIds, SubnetType.PRIVATE_WITH_EGRESS));
-      this.publicSubnetIds.push(...getSubnetIds(publicSubnetIds, SubnetType.PUBLIC));
     }
 
     // We are creating a new VPC and subnets.
@@ -56,11 +54,11 @@ export class DmsVpc extends Construct {
         ipAddresses: IpAddresses.cidr('10.0.0.0/16'),
       } as  VpcProps);
       privateSubnetIds = this._vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS }).subnetIds;
-      publicSubnetIds = this._vpc.selectSubnets({ subnetType: SubnetType.PUBLIC }).subnetIds;
     }
 
     // Create the Security Group
     this._sg = new SecurityGroup(this, `${prefix()}-${id}-sg`, {
+      securityGroupName: `${prefix()}-vpc-sg`,
       vpc: this._vpc,
       description: 'Allow DMS to connect to target PostgreSQL in company network',
     });
@@ -85,8 +83,5 @@ export class DmsVpc extends Construct {
   }
   public get privateSubnetIds(): string[] {
     return this._privateSubnetIds;
-  }
-  public get publicSubnetIds(): string[] {
-    return this._publicSubnetIds;
   }
 }

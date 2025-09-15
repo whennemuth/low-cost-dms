@@ -46,6 +46,7 @@ export class DmsEndpoints extends Construct {
     }
  
     const sourceProps = {
+      endpointIdentifier: `${prefix()}-source-endpoint`,
       endpointType: 'source',
       engineName: 'oracle',
       serverName: oracleHost,
@@ -58,6 +59,7 @@ export class DmsEndpoints extends Construct {
     this._sourceEndpoint = new CfnEndpoint(this, `${prefix()}-${id}-source`, sourceProps);
 
     const targetProps = {
+      endpointIdentifier: `${prefix()}-target-endpoint`,
       endpointType: 'target',
       engineName: 'postgres',
       serverName: postgresHost,

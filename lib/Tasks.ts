@@ -6,6 +6,7 @@ import { DmsEndpoints } from "./Endpoint";
 import { VpcRole } from "./Role";
 import { TableMapping } from "./TableMappings";
 import { DmsVpc } from "./Vpc";
+import { MigrationTypeValue } from "@aws-sdk/client-database-migration-service";
 
 export type TaskParms = {
   scope: Construct,
@@ -14,12 +15,6 @@ export type TaskParms = {
   dmsEndpoints: DmsEndpoints,
   dmsVpcRole?: VpcRole,
   replicationSubnetGroupId: string
-}
-
-export enum ReplicationType {
-  FULL_LOAD = "full-load",
-  CDC = "cdc",
-  FULL_LOAD_AND_CDC = "full-load-and-cdc"
 }
 
 /**
@@ -42,8 +37,8 @@ export class Tasks {
   }
 
   private createServerlessSmokeTestTasks = (parms:TaskParms) => {
-    const { scope, context, context: { oracleTestTables=[] }, dmsVpc, dmsEndpoints } = parms;
-    const { FULL_LOAD, CDC, FULL_LOAD_AND_CDC } = ReplicationType;
+    const { scope, context, context: { oracleTestTables=[] }, dmsVpc, dmsEndpoints, replicationSubnetGroupId } = parms;
+    const { FULL_LOAD, CDC, FULL_LOAD_AND_CDC } = MigrationTypeValue;
     const tableMapping = TableMapping
       .includeTestTables(oracleTestTables)
       .lowerCaseTargetTableNames();
@@ -53,6 +48,7 @@ export class Tasks {
       id: `${FULL_LOAD}-smoke-test`,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: FULL_LOAD,
+      replicationSubnetGroupId,
       tableMapping
     } as DmsConfigProps));
 
@@ -61,6 +57,7 @@ export class Tasks {
       id: `${FULL_LOAD_AND_CDC}-smoke-test`,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: FULL_LOAD_AND_CDC,
+      replicationSubnetGroupId,
       tableMapping
     } as DmsConfigProps));
 
@@ -69,20 +66,27 @@ export class Tasks {
       id: `${CDC}-smoke-test`,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: CDC,
+      replicationSubnetGroupId,
       tableMapping
     } as DmsConfigProps));
   }
 
   private createServerlessTask = (parms:TaskParms) => {
-    const { scope, context, dmsVpc, dmsEndpoints, dmsVpcRole } = parms;
-    const { FULL_LOAD, CDC, FULL_LOAD_AND_CDC } = ReplicationType;
+    const { scope, context, context: { oracleSourceSchemas=[] }, dmsVpc, dmsEndpoints, dmsVpcRole, replicationSubnetGroupId } = parms;
+    const { FULL_LOAD, CDC, FULL_LOAD_AND_CDC } = MigrationTypeValue;
+
+    if(oracleSourceSchemas.length == 0) {
+      throw new Error('No source schemas specified for standard tasks');
+    }
 
     this.serverlessConfigs.push(new DmsConfig({
       id: FULL_LOAD,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: FULL_LOAD,
+      replicationSubnetGroupId,
       tableMapping: new TableMapping()
-        .includeSchema('KCOEUS', 'all-kuali-tables')
+        .includeSchemas(oracleSourceSchemas)
+        .excludeTable('KCOEUS', 'BU_TEMP_%')
         .lowerCaseTargetTableNames()
     } as DmsConfigProps));
 
@@ -90,8 +94,10 @@ export class Tasks {
       id: FULL_LOAD_AND_CDC,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: FULL_LOAD_AND_CDC,
+      replicationSubnetGroupId,
       tableMapping: new TableMapping()
-        .includeSchema('KCOEUS', 'all-kuali-tables')
+        .includeSchemas(oracleSourceSchemas)
+        .excludeTable('KCOEUS', 'BU_TEMP_%')
         .lowerCaseTargetTableNames()
     } as DmsConfigProps));
 
@@ -99,8 +105,10 @@ export class Tasks {
       id: CDC,
       scope, context, dmsVpc, dmsEndpoints,
       replicationType: CDC,
+      replicationSubnetGroupId,
       tableMapping: new TableMapping()
-        .includeSchema('KCOEUS', 'all-kuali-tables')
+        .includeSchemas(oracleSourceSchemas)
+        .excludeTable('KCOEUS', 'BU_TEMP_%')
         .lowerCaseTargetTableNames()
     } as DmsConfigProps));
 
@@ -171,6 +179,7 @@ export class Tasks {
       replicationType: 'full-load-and-cdc',
       tableMapping: TableMapping
         .includeTestTables(oracleTestTables)
+        .excludeTable('KCOEUS', 'BU_TEMP_%')
         .lowerCaseTargetTableNames(),
       replicationSubnetGroupId,
       instanceClass: 'dms.t3.medium',
@@ -184,19 +193,19 @@ export class Tasks {
 
   public get fullLoadConfigArn():string|undefined {
     const { serverlessConfigs } = this;
-    const { FULL_LOAD } = ReplicationType;
+    const { FULL_LOAD } = MigrationTypeValue;
     // The correct config will be the one who id matches its replication type.
     return serverlessConfigs.find(config => config.replicationType === FULL_LOAD && config.id === FULL_LOAD)?.configArn;
   }
   public get cdcOnlyConfigArn():string|undefined {
     const { serverlessConfigs } = this;
-    const { CDC } = ReplicationType;
+    const { CDC } = MigrationTypeValue;
     // The correct config will be the one who id matches its replication type.
     return serverlessConfigs.find(config => config.replicationType === CDC && config.id === CDC)?.configArn;
   }
   public get fullLoadAndCdcConfigArn():string|undefined {
     const { serverlessConfigs } = this;
-    const { FULL_LOAD_AND_CDC } = ReplicationType;
+    const { FULL_LOAD_AND_CDC } = MigrationTypeValue;
     // The correct config will be the one who id matches its replication type.
     return serverlessConfigs.find(config => config.replicationType === FULL_LOAD_AND_CDC && config.id === FULL_LOAD_AND_CDC)?.configArn;
   }

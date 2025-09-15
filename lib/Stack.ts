@@ -1,17 +1,15 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { Stack, StackProps } from 'aws-cdk-lib';
+import { CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
 import { Peer, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 import { DmsEndpoints } from "./Endpoint";
-import { StartReplicationTaskLambdaFunction } from './lambda_old/Lambda';
 import { PostgresTarget } from './PostgresTarget';
 import { VpcRole } from './Role';
-import { DmsRule } from "./Rule";
 import { Tasks } from './Tasks';
 import { DmsVpc } from "./Vpc";
 import { StartStopLambdas } from "./lambda/Lambda";
-import { CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
 
 
 export type KualiDmsStackProps = StackProps & {
@@ -85,14 +83,13 @@ export class KualiDmsStack extends Stack {
     const replicationSubnetGroupId = new CfnReplicationSubnetGroup(this, `replication-subnet-group`, {
       replicationSubnetGroupDescription: `${prefix()}-subnet-group`,
       replicationSubnetGroupIdentifier: `${prefix()}-subnet-group`,
-      subnetIds: dmsVpc.publicSubnetIds,
+      subnetIds: dmsVpc.privateSubnetIds,
     }).ref;
 
     // Create tasks with replication instances to run on, or the serverless configuration(s) equivalent.
     const tasks = new Tasks({ 
       scope:this, context, dmsVpc, dmsEndpoints, dmsVpcRole, replicationSubnetGroupId 
     });
-    const { fullLoadConfigArn, fullLoadAndCdcConfigArn, cdcOnlyConfigArn } = tasks;
 
     // Add an ingress rule to the source database for the DMS replication service.
     const { oracleSecurityGroupId:dbSecurityGroupId="", oraclePort } = context;
@@ -106,15 +103,6 @@ export class KualiDmsStack extends Stack {
     const dmsLambdaFunctions = new StartStopLambdas({
       scope: this, id: 'lambda', context, dmsVpc, dmsEndpoints, replicationSubnetGroupId
     });
-
-    // // Create a Lambda function that performs "catchup" replication that runs briefly and stops.
-    // const dmsLambdaFunction = new StartReplicationTaskLambdaFunction(this, 'lambda', { 
-    //   context, 
-    //   fullLoadConfigArn, fullLoadAndCdcConfigArn, cdcOnlyConfigArn
-    // });
-
-    // Create an event bridge schedule that triggers the lambda function for "catchup" replication.
-    // const dmsSchedule = new DmsRule({ scope: this, constructId: 'lambda-schedule', context, dmsLambdaFunction });
   }
 
   public static getName(context: IContext): string|undefined {

@@ -1,5 +1,4 @@
-import { CfnReplicationInstance, CfnReplicationSubnetGroup, CfnReplicationTask, CfnReplicationTaskProps } from "aws-cdk-lib/aws-dms";
-import { SubnetType } from "aws-cdk-lib/aws-ec2";
+import { CfnReplicationInstance, CfnReplicationTask, CfnReplicationTaskProps } from "aws-cdk-lib/aws-dms";
 import { Construct } from "constructs";
 import { DmsConfigProps } from "./ConfigServerless";
 import { VerboseReplicationSettings } from "./ReplicationSetting";
@@ -20,27 +19,15 @@ export class DmsTask extends Construct {
     super(props.scope, props.id);
 
     let { 
-      id, scope,
-      context, context: { oracleLargestLobKB=0 },
-      dmsVpc: { sg: { securityGroupId }, vpc, publicSubnetIds=[] }, 
+      id, context, context: { oracleLargestLobKB=0 }, dmsVpc: { sg: { securityGroupId } }, 
       dmsEndpoints: { sourceEndpointArn, targetEndpointArn },
-      replicationType,
+      replicationType, replicationSubnetGroupId,
       tableMapping,
       instanceClass = 'dms.t3.medium',
       allocatedStorage = 50
     } = props;
 
     const { stack: { prefix=()=>'undefined' } = {} } = context;
-
-    // Use public subnets or select from VPC
-    publicSubnetIds = publicSubnetIds.length > 0 ? publicSubnetIds : vpc.selectSubnets({ subnetType: SubnetType.PUBLIC }).subnetIds;
-
-    // Create the replication subnet group
-    const subnetGroup = new CfnReplicationSubnetGroup(this, `${prefix()}-${id}-subnet-group`, {
-      replicationSubnetGroupDescription: `${prefix()}-${id}-subnet-group`,
-      replicationSubnetGroupIdentifier: `${prefix()}-${id}-subnet-group`,
-      subnetIds: publicSubnetIds,
-    });
 
     const replicationSettings = Object.assign({}, VerboseReplicationSettings);
     if(oracleLargestLobKB > 0) {
@@ -57,7 +44,7 @@ export class DmsTask extends Construct {
       allocatedStorage: allocatedStorage,
       publiclyAccessible: false,
       vpcSecurityGroupIds: [securityGroupId],
-      replicationSubnetGroupIdentifier: subnetGroup.ref,
+      replicationSubnetGroupIdentifier: replicationSubnetGroupId,
       multiAz: false,
     });
 

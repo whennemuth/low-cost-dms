@@ -1,4 +1,4 @@
-import { Duration } from "aws-cdk-lib";
+import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { Effect, PolicyDocument, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { ScheduleGroup } from "aws-cdk-lib/aws-scheduler";
@@ -7,6 +7,7 @@ import { IContext } from "../../context/IContext";
 import { AbstractFunction } from "../AbstractFunction";
 import { DmsEndpoints } from "../Endpoint";
 import { DmsVpc } from "../Vpc";
+import { Cron } from "./Cron";
 
 
 export type StartStopLambdasProps = {
@@ -17,6 +18,9 @@ export type StartStopLambdasProps = {
   dmsEndpoints: DmsEndpoints;
   replicationSubnetGroupId: string;
 };
+
+// Default the replication to run daily at 2am Local time
+export const DEFAULT_DAILY_CRON = Cron.dailyAtHourExpression(2);
 
 export class StartStopLambdas extends Construct {
   private props: StartStopLambdasProps;
@@ -50,7 +54,10 @@ export class StartStopLambdas extends Construct {
   private createEventSchedulerGroup = () => {
     const { props: { context: { stack: { prefix=()=>'undefined' } = {} } } } = this;
     this.scheduleGroupName = `${prefix()}-schedules`;
-    new ScheduleGroup(this, 'schedule-group', { scheduleGroupName: this.scheduleGroupName });
+    new ScheduleGroup(this, 'schedule-group', { 
+      scheduleGroupName: this.scheduleGroupName, 
+      removalPolicy: RemovalPolicy.DESTROY 
+    });
   }
 
   /**
@@ -89,9 +96,9 @@ export class StartStopLambdas extends Construct {
         replicationSubnetGroupId, dmsVpc, dmsEndpoints: { 
           sourceEndpointArn, targetEndpointArn 
         }, context: {
-          stack: { Account, Region, prefix=()=>'undefined' } = {}, scheduleRateHours=24,
-          oracleLargestLobKB, oracleRedoLogRetentionHours, oracleTestTables, oracleSourceSchemas,
-          scheduledRunAbortIfBeyondRedoLogRetention, scheduledRunDurationMinutes, scheduledRunRetryOnFailure,
+          stack: { Account, Region, prefix=()=>'undefined' } = {},
+          oracleLargestLobKB, oracleTestTables, oracleSourceSchemas,
+          scheduledRunRetryOnFailure, replicationScheduleCronExpression, durationForFullLoadMinutes, durationForCdcMinutes
         },       
       }} = this;
 
@@ -136,13 +143,13 @@ export class StartStopLambdas extends Construct {
         }
       }),
       environment: {
+        PREFIX: `${prefix()}`,
         IGNORE_LAST_ERROR: scheduledRunRetryOnFailure ? 'true' : 'false',
-        SOURCE_DB_REDO_LOG_RETENTION_HOURS: `${oracleRedoLogRetentionHours ?? '0'}`,
-        ABORT_IF_BEYOND_REDO_LOG_RETENTION: scheduledRunAbortIfBeyondRedoLogRetention ? 'true' : 'false',
-        // REPLICATION_DURATION_MINUTES: `${scheduledRunDurationMinutes ?? '45'}`,
         REPLICATION_SUBNET_GROUP_ID: replicationSubnetGroupId,
         REPLICATION_AVAILABILITY_ZONE: dmsVpc.vpc.availabilityZones[0], // Let DMS pick the AZ
-        REPLICATION_SCHEDULE_RATE_HOURS: `${scheduleRateHours}`,
+        REPLICATION_SCHEDULE_CRON_EXPRESSION: `${replicationScheduleCronExpression ?? DEFAULT_DAILY_CRON}`,
+        REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES: `${durationForFullLoadMinutes ?? '120'}`,
+        REPLICATION_DURATION_FOR_CDC_MINUTES: `${durationForCdcMinutes ?? '60'}`,
         VPC_SECURITY_GROUP_ID: dmsVpc.sg.securityGroupId,
         SOURCE_ENDPOINT_ARN: sourceEndpointArn,
         TARGET_ENDPOINT_ARN: targetEndpointArn,
@@ -150,7 +157,6 @@ export class StartStopLambdas extends Construct {
         SOURCE_TEST_TABLES: JSON.stringify(oracleTestTables),
         SOURCE_SCHEMAS: JSON.stringify(oracleSourceSchemas),
         STOP_REPLICATION_FUNCTION_ARN: `arn:aws:lambda:${Region}:${Account}:function:${stopReplicationFunctionName}`,
-        NEVER_ABORT: 'false',
         ACTIVE: 'false' // The lambda will abort early if this is not set to 'true'
       }
     });
@@ -158,7 +164,12 @@ export class StartStopLambdas extends Construct {
 
   private createStopReplicationLambda = () => {
     const { scheduleGroupName, startReplicationFunctionName, stopReplicationFunctionName:functionName,
-      props: {context: { stack: { Account, Region, prefix=()=>'undefined' } = {} } } 
+      props: { 
+        context: { 
+          stack: { Account, Region, prefix=()=>'undefined' } = {}, 
+          replicationScheduleCronExpression, durationForFullLoadMinutes, durationForCdcMinutes
+        } 
+      } 
     } = this;
 
     this._stopReplicationLambda = new class extends AbstractFunction { }(this, `stop-replication-lambda`, {
@@ -203,7 +214,12 @@ export class StartStopLambdas extends Construct {
       }),
       environment: {
         START_REPLICATION_FUNCTION_ARN: `arn:aws:lambda:${Region}:${Account}:function:${startReplicationFunctionName}`,
-        ACTIVE: 'false' // The lambda will abort early if this is not set to 'true'
+        REPLICATION_SCHEDULE_CRON_EXPRESSION: `${replicationScheduleCronExpression ?? DEFAULT_DAILY_CRON}`,
+        REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES: `${durationForFullLoadMinutes ?? '120'}`,
+        REPLICATION_DURATION_FOR_CDC_MINUTES: `${durationForCdcMinutes ?? '60'}`,
+        IGNORE_LAST_ERROR: 'true', // Always ignore errors when stopping
+        ACTIVE: 'false', // The lambda will abort early if this is not set to 'true',
+        PREFIX: `${prefix()}`
       }
     });
 

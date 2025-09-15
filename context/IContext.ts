@@ -13,11 +13,11 @@ export type DatabaseTable = {
 export interface IContext {
 
   stack?: StackParameters; // Parameters for the CDK stack, including account, region, and tags
-  scheduleRateHours?: number;
+  replicationScheduleCronTimezone?: string; // Timezone for the cron expression, defaults to UTC
+  replicationScheduleCronExpression?: string; // A cron expression for scheduling the replication tasks
   scheduledRunRetryOnFailure?: boolean;
-  scheduledRunAbortIfBeyondRedoLogRetention?: boolean;
-  scheduledRunDurationMinutes?: number;
-  publicSubnetIds?: string[];
+  durationForFullLoadMinutes?: number; // Duration to run a full-load replication before switching to CDC
+  durationForCdcMinutes?: number; // Duration to run a CDC replication before stopping it
   serverless?: boolean; // Whether to use serverless DMS replication instances
 
   oracleHost: string; // Oracle RDS endpoint
@@ -31,7 +31,6 @@ export interface IContext {
   oracleSourceSchemas: string[]; // Optional list of source schemas for Oracle RDS
   oracleTestTables?: DatabaseTable[]; // Optional list of test tables for Oracle RDS
   oracleLargestLobKB?: number; // Optional largest LOB size in KB for Oracle RDS
-  oracleRedoLogRetentionHours?: number; // Optional redo log retention period in hours for Oracle RDS
 
   postgresDbName: string; // PostgreSQL database name
   postgresHost: string; // PostgreSQL host

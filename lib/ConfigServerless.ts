@@ -1,5 +1,4 @@
-import { CfnReplicationConfig, CfnReplicationConfigProps, CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
-import { SubnetType } from "aws-cdk-lib/aws-ec2";
+import { CfnReplicationConfig, CfnReplicationConfigProps } from "aws-cdk-lib/aws-dms";
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 import { DmsEndpoints } from "./Endpoint";
@@ -31,7 +30,7 @@ export class DmsConfig {
 
     let { 
       id, scope, context, context: { oracleLargestLobKB=0 },
-      dmsVpc: { sg: { securityGroupId }, vpc, publicSubnetIds=[] }, 
+      dmsVpc: { sg: { securityGroupId }, vpc }, 
       dmsEndpoints: { sourceEndpointArn, targetEndpointArn },
       replicationType, tableMapping, replicationSubnetGroupId
     } = props;
