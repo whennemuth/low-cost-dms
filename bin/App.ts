@@ -4,9 +4,9 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Context } from '../context/context.ts';
-import { PostgresTarget, RdsInstanceProps } from '../lib/PostgresTarget.ts';
+import { PostgresTarget } from '../lib/PostgresTarget.ts';
 import { VpcRole } from '../lib/Role.ts';
-import { KualiDmsStack } from '../lib/Stack.ts';
+import { FrugalDmsStack } from '../lib/Stack.ts';
 
 // Load environment variables from .env file if it exists
 // This allows local development to override context.json values
@@ -22,7 +22,7 @@ if (fs.existsSync(rootEnvPath)) {
 }
 
 const context = new Context();
-export const StackDescription = 'Kuali Raw Oracle to PostgreSQL migration using AWS DMS';
+export const StackDescription = 'Raw RDS to PostgreSQL migration using AWS DMS';
 const app = new App();
 
 // Get the stack parameters from the context
@@ -36,7 +36,7 @@ if(!Id || !Account || !Region || !Service || !Function || !Landscape) {
 
 // Set the stack properties
 const stackProps: StackProps = {
-  stackName: KualiDmsStack.getName(context),
+  stackName: FrugalDmsStack.getName(context),
   description: StackDescription,
   env: { account:Account, region: Region },
   tags: { Service, Function, Landscape }
@@ -82,7 +82,7 @@ const stackProps: StackProps = {
       }
     }
   }
-  else if(await KualiDmsStack.stackHasRdsInstance(context.stack.Id, PostgresTarget.getIdentifier(context))) {
+  else if(await FrugalDmsStack.stackHasRdsInstance(context.stack.Id, PostgresTarget.getIdentifier(context))) {
     // This stack already exists and "owns" an RDS instance, which means we must be performing an update.
     updateRdsTarget = true;
   }
@@ -92,15 +92,15 @@ const stackProps: StackProps = {
 
   // Define the stack properties
   const dmsStackProps = Object.assign({}, stackProps, {
-    id:'KualiDmsStack', scope: app, context, createVpcRole, createRdsTarget, updateRdsTarget, rdsSecurityGroupId
+    id:'FrugalDmsStack', scope: app, context, createVpcRole, createRdsTarget, updateRdsTarget, rdsSecurityGroupId
   });
 
   /**
-   * Instantiate the KualiDmsStack.
-   * This stack will create the necessary AWS resources for Kuali DMS
+   * Instantiate the FrugalDmsStack.
+   * This stack will create the necessary AWS resources for DMS operations,
    * including VPC, security groups, DMS replication instance, and endpoints.
    */
-  const stack = new KualiDmsStack(dmsStackProps);
+  const stack = await FrugalDmsStack.getInstance(dmsStackProps);
 
   // Adding tags into the stackProps does not seem to work - have to apply tags using aspects:
   Tags.of(stack).add('Service', Service);

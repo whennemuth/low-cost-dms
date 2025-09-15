@@ -1,9 +1,8 @@
-import { CfnReplicationConfig, CfnReplicationConfigProps, CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
-import { SubnetType } from "aws-cdk-lib/aws-ec2";
+import { CfnReplicationConfig, CfnReplicationConfigProps } from "aws-cdk-lib/aws-dms";
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 import { DmsEndpoints } from "./Endpoint";
-import { ServerlessReplicationSettings } from "./ReplicationSetting";
+import { getReplicationSettings } from "./replication-settings/ReplicationSetting";
 import { TableMapping } from "./TableMappings";
 import { DmsVpc } from "./Vpc";
 
@@ -26,28 +25,33 @@ export class DmsConfig {
   private _props: DmsConfigProps;
   private _config: CfnReplicationConfig;
 
-  constructor(props: DmsConfigProps) {
+  private constructor(props: DmsConfigProps) {
     this._props = props;
+  }
 
+  public static getInstance = async (props: DmsConfigProps): Promise<DmsConfig> => {
+    const config = new DmsConfig(props);
+        
     let { 
-      id, scope, context, context: { oracleLargestLobKB=0 },
-      dmsVpc: { sg: { securityGroupId }, vpc, publicSubnetIds=[] }, 
+      id, scope, context, context: { sourceDbLargestLobKB=0, sourceDbEngineName },
+      dmsVpc: { sg: { securityGroupId }, vpc }, 
       dmsEndpoints: { sourceEndpointArn, targetEndpointArn },
       replicationType, tableMapping, replicationSubnetGroupId
     } = props;
 
-    const { stack: { prefix=()=>'undefined' } = {} } = context;
+    const { stack: { prefix=()=>'undefined' } = {}, postgresSchema } = context;
 
-    const replicationSettings = Object.assign({}, ServerlessReplicationSettings);
-    if(oracleLargestLobKB > 0) {
+    const coreSettings = await getReplicationSettings(postgresSchema);
+    const replicationSettings = Object.assign({}, coreSettings);
+    if(sourceDbLargestLobKB > 0) {
       replicationSettings.TargetMetadata = {
         ...replicationSettings.TargetMetadata,
-        LobMaxSize: oracleLargestLobKB
+        LobMaxSize: sourceDbLargestLobKB
       };
     }
 
     // Create the DMS replication config
-    this._config = new CfnReplicationConfig(scope, id, {
+    config._config = new CfnReplicationConfig(scope, id, {
       replicationConfigIdentifier: `${prefix()}-${id}`,
       replicationType,
       computeConfig: {
@@ -63,7 +67,10 @@ export class DmsConfig {
       tableMappings: tableMapping.toJSON(),
       replicationSettings,
     } as CfnReplicationConfigProps);
+
+    return config;
   }
+
 
   public get id(): string {
     return this._props.id;

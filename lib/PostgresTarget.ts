@@ -33,6 +33,11 @@ export class PostgresTarget extends Construct {
       stack: { prefix=()=>'undefined' } = {} } 
     } = props;
 
+    // Make sure instance size is valid
+    if(postgresInstanceSize && /[^a-z]/g.test(postgresInstanceSize.toString())) {
+      throw new Error(`Invalid postgresInstanceSize: ${postgresInstanceSize}. Must be one of: micro, small, medium, large, xlarge, 2xlarge`);
+    }
+
     // Get the credentials
     const postgresSecret:ISecret = Secret.fromSecretNameV2(this, `${prefix()}-${id}-postgres-secret`, postgresSecretName!);
     const credentials = Credentials.fromSecret(postgresSecret);

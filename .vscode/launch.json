@@ -7,7 +7,7 @@
       "name": "CDK Debugger (App)",
       "skipFiles": ["<node_internals>/**"],
       "runtimeArgs": ["-r", "${workspaceFolder}/node_modules/ts-node/register/transpile-only"],
-      "args": ["${workspaceFolder}/bin/KualiDms.ts"],
+      "args": ["${workspaceFolder}/bin/App.ts"],
       "env": { "AWS_PROFILE": "infnprd" }
     },
     {

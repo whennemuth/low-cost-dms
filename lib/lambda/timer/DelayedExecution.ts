@@ -30,27 +30,29 @@ export interface ScheduledLambdaInput {
 export class DelayedLambdaExecution implements DelayedExecution {
   private lambdaArn:string;
   private lambdaInput:any;
-  private uuid:string;
+  private suffix:string;
+  // private uuid:string;
 
   constructor(lambdaArn:string, lambdaInput:any) {
     this.lambdaArn = lambdaArn;
     this.lambdaInput = lambdaInput;
-    this.uuid = uuidv4();
+    this.suffix = new Date().toISOString().replace(/[\:\.]/g, '-');    
+    // this.uuid = uuidv4();
   }
 
   public startCountdown = async (timer:EggTimer, Name:string, Description?:string):Promise<any> => {
     return timer.startTimer(async () => {
-      const { lambdaArn, lambdaInput, uuid } = this;
+      const { lambdaArn, lambdaInput, suffix } = this;
       const { ACCOUNT, REGION:region, PREFIX } = process.env;
-      const scheduleName = `${PREFIX}-${Name}-${uuid}` // 64 character limit;
+      const scheduleName = `${PREFIX}-${Name}-${suffix}` // 64 character limit;
       Description = Description || `${PREFIX}-${Name}`;
 
-      if(timer.getMilliseconds() == 0) {
+      if(timer.millisecondsToExpire == 0) {
         console.log(`${Description} NOT SCHEDULED (the corresponding cron has been deactivated)`);
         return;
       }
 
-      const groupName = `${PREFIX}-scheduler-group`;
+      const groupName = `${PREFIX}-schedules`;
       const scheduleExpression = timer.getCronExpression();
 
       // Create the event bridge schedule
@@ -106,7 +108,10 @@ export const PostExecution = () => {
       }
       catch(e) {
         if((e as Error).name == 'ResourceNotFoundException') {
-          log(e, `Event bridge schedule ${scheduleName} in group ${groupName} not found`);
+          log(`Event bridge schedule ${scheduleName} in group ${groupName} not found! Nothing to cleanup.`);
+        }
+        else if((e as Error).name == 'ValidationException' && !/[0-9a-zA-Z-_.]+/.test(scheduleName)) {
+          log(`Event bridge schedule ${scheduleName} is not a valid schedule name! Cancelling schedule cleanup.`);
         }
         else {
           log(e, `Failed to delete event bridge schedule ${scheduleName} in group ${groupName}`);
@@ -140,7 +145,7 @@ if(args.length > 2 && args[2].replace(/\\/g, '/').endsWith('lib/lambda/timer/Del
       (async () => {
         const delayedTestExecution = new class implements DelayedExecution {
           startCountdown(timer:EggTimer, Name:string, Description?:string): Promise<any> {
-            return new Promise(resolve => setTimeout(resolve, timer.getMilliseconds()));
+            return new Promise(resolve => setTimeout(resolve, timer.millisecondsToExpire));
           }
         }();
 
@@ -154,7 +159,7 @@ if(args.length > 2 && args[2].replace(/\\/g, '/').endsWith('lib/lambda/timer/Del
       // Start an egg timer that "delegates" the countdown to some other entity - in this case, event bridge.
       // Thus the egg timer returns immediately and the real egg timer is an event bridge schedule.
       (async () => {
-        const context:IContext = await require('../../../../contexts/context.json');
+        const context:IContext = await require('../../../context/context.json');
         const { stack: { Id, Account, Region, prefix=()=>'undefined' } = {} } = context;
         process.env.ACCOUNT = Account;
         process.env.REGION = Region;

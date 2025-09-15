@@ -21,7 +21,9 @@ export const VerboseReplicationSettings = {
     RecoverableErrorCount: 1000,
     RecoverableErrorInterval: 5,
     RecoverableErrorThrottling: true,
-    RecoverableErrorThrottlingMax: 1800
+    RecoverableErrorThrottlingMax: 1800,
+    FailOnNoTablesCaptured: true,
+    // FullLoadIgnoreConflicts: false,
   },
   ValidationSettings: {
     EnableValidation: true, // Validation is off by default
@@ -40,17 +42,22 @@ export const VerboseReplicationSettings = {
   },
   FullLoadSettings: {
     // TargetTablePrepMode: "DROP_AND_CREATE", // Default is DO_NOTHING
-    MaxFullLoadSubTasks: 8,
+    MaxFullLoadSubTasks: 8, // Controls how many tables can be processed in parallel. Increase this for many small tables.
+    ParallelLoadThreads: 2, // Controls how much each sub task can do in parallel. Increase this for large tables.
     TransactionConsistencyTimeout: 600,
-    CommitRate: 10000
+    CommitRate: 10000, // Indicates the maximum number of records that can be transferred together
+    CreatePkAfterFullLoad: false,
+    StopTaskCachedChangesApplied: false,
+    StopTaskCachedChangesNotApplied: false
   },
+
   TargetMetadata: {
     SupportLobs: true, // Explicitly enabled for clarity
-    FullLobMode: true,
+    FullLobMode: false,
     LobChunkSize: 64,
-    LobMaxSize: 180000,  // ~163MB + buffer
     InlineLobMaxSize: 0,
-    LimitedSizeLobMode: false,
+    LimitedSizeLobMode: true,
+    LobMaxSize: 7000,  // ~6.86MB + buffer
     BatchApplyEnabled: true,
     TaskRecoveryTableEnabled: true
   },
@@ -70,9 +77,15 @@ export const VerboseReplicationSettings = {
  */
 export const ServerlessReplicationSettings = {
   ...VerboseReplicationSettings,
-  // Logging: {
-  //   EnableLogging: true,
-  //   EnableLogContext: true
-  // }
+  Logging: { ...VerboseReplicationSettings.Logging, },
+  ErrorBehavior: { ...VerboseReplicationSettings.ErrorBehavior, },
+  ValidationSettings: { ...VerboseReplicationSettings.ValidationSettings, },
+  ControlTablesSettings: { ...VerboseReplicationSettings.ControlTablesSettings, },
+  TargetMetadata: { ...VerboseReplicationSettings.TargetMetadata, },
+  CheckpointSettings: { ...VerboseReplicationSettings.CheckpointSettings, },
+  FullLoadSettings: { 
+    ...VerboseReplicationSettings.FullLoadSettings, 
+    // ParallelLoadThreads not available for serverless replications as it is managed automatically based on the DCU settings.
+    ParallelLoadThreads: undefined
+  },
 } as any;
-

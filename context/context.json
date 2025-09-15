@@ -10,41 +10,38 @@
     }
   },
   "serverless": true,
-  "scheduleRateHours": 24,
   "scheduledRunRetryOnFailure": true,
-  "scheduledRunAbortIfBeyondRedoLogRetention": true,
-  "scheduledRunDurationMinutes": 45,
-  "publicSubnetIds": [
-  	"subnet-07afd7c2e54376dd0",
-  	"subnet-03034a40da92d6d08"
-  ],
+  "replicationScheduleCronExpression": "0 2 * * *",
+  "replicationScheduleCronTimezone": "America/New_York",
+  "durationForFullLoadMinutes": 120,
+  "durationForCdcMinutes": 60,
 
-  "oracleHost": "stg.db.kualitest.research.bu.edu",
-  "oraclePort": 1521,
-  "oracleUser": "DMS_USER",
-  "oraclePassword": "",
-  "oracleSecretName": "kuali/stg/kuali-oracle-rds-app-password",
-  "oracleSecurityGroupId": "sg-0b8b04f9cf045f812",
-  "oracleVpcId": "vpc-0290de1785982a52f",
-  "oracleLargestLobKB": 180000,
-  "oracleRedoLogRetentionHours": 48,
-  "oracleSubnetIds": [
+  "sourceDbEngineName": "oracle",
+  "sourceDbHost": "stg.db.kualitest.research.bu.edu",
+  "sourceDbPort": 1521,
+  "sourceDbUser": "DMS_USER",
+  "sourceDbPassword": "",
+  "sourceDbSecretName": "kuali/stg/kuali-oracle-rds-app-password",
+  "sourceDbSecurityGroupId": "sg-0b8b04f9cf045f812",
+  "sourceDbVpcId": "vpc-0290de1785982a52f",
+  "sourceDbLargestLobKB": 7000,
+  "sourceDbSubnetIds": [
     "subnet-0d4acd358fba71d20",
     "subnet-08afdf870ee85d511"
   ],
-  "oracleSourceSchemas": [
+  "sourceDbSchemas": [
     "KCOEUS"
   ],
-  "oracleTestTables": [
-    { "schemaName": "KCOEUS", "tableNames": [ "DMS_SMOKE_TEST" ] }
+  "sourceDbTestTables": [
+    { "schemaName": "KCOEUS", "tableNames": [ "DMS_SMOKE_TEST2" ] }
   ],
 
-  
+  "postgresHost": "ist-pg-dl-dev01.bu.edu",
   "postgresPort": 5432,
   "postgresDbName": "kuali_db",
-  "postgresSchema": "kl_user",
+  "postgresSchema": "kuali_raw2",
+  "postgresUser": "kl_user",
   "postgresPassword": "",
-  "postgresInstanceSize": "small",
   "postgresSecretName": "kuali/stg/kuali-postgres-credentials",
   "postgresInstanceIngress": [
     { "cidr": "168.122.78.128/28", "description": "vpn.bu.edu/dbreport Off Campus 1" },

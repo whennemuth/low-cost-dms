@@ -21,9 +21,11 @@ export type Rule = {
 export class TableMapping {
   private _rules: Rule[];
   private _lowercaseTargetSchemaNames: boolean = false;
+  private _schemaMap: Map<string, string> = new Map();
 
-  constructor() {
+  constructor(schemaMap: Map<string, string> = new Map()) {
     this._rules = [];
+    this._schemaMap = schemaMap;
   }
 
   private addSchemaRule = (schemaName: string, action: 'exclude' | 'include', ruleName?: string): TableMapping => {
@@ -62,20 +64,24 @@ export class TableMapping {
     return this;
   }
 
-  private addLowercaseTransformRule = (schemaName: string): TableMapping => {
+  private addSchemaRenameRule = (schemaName: string, newSchemaName: string): TableMapping => {
     const newRule: Rule = {
       "rule-type": "transformation",
       "rule-id": `${this._rules.length + 1}`,
-      "rule-name": `lowercase-schema-${schemaName}`,
+      "rule-name": `rename-schema-${schemaName}-to-${newSchemaName}`,
       "rule-target": "schema",
       "object-locator": {
         "schema-name": schemaName
       },
       "rule-action": "rename",
-      "value": schemaName.toLowerCase()
+      "value": newSchemaName
     };
     this._rules.push(newRule);
     return this;
+  }
+
+  private addLowercaseTransformRule = (schemaName: string): TableMapping => {
+    return this.addSchemaRenameRule(schemaName, schemaName.toLowerCase());
   }
 
   private addSchemaRules = (schemaNames: string[], action: 'exclude' | 'include'): TableMapping => {
@@ -145,23 +151,38 @@ export class TableMapping {
       this._rules.push(defaultRule);
     }
 
-    // Add lowercase transformation rules for target schema names
-    if (this._lowercaseTargetSchemaNames) {
-      const schemaNames = Array.from(new Set(this._rules.map(rule => rule['object-locator']['schema-name'])));      
-      schemaNames.forEach(schemaName => {
-        if( ! this._rules.some((rule:Rule) => {
+    // Add renaming or lowercasing transformation rules for target schema names
+    const schemaNames = Array.from(new Set(this._rules.map(rule => rule['object-locator']['schema-name'])));      
+    schemaNames.forEach(sourceSchemaName => {
+      if(this._schemaMap.has(sourceSchemaName)) {
+        let targetSchemaName = this._schemaMap.get(sourceSchemaName);
+        if(this._lowercaseTargetSchemaNames) {
+          targetSchemaName = targetSchemaName?.toLowerCase();
+        }
+        if(targetSchemaName && ! this._rules.some((rule:Rule) => {
           // Add the rule only if it has not been already. 
           return (
             rule['rule-action'] === 'rename' && 
-            rule['object-locator']['schema-name'] === schemaName &&
+            rule['object-locator']['schema-name'] === sourceSchemaName &&
             rule['rule-target'] === 'schema' &&
-            rule['value'] === schemaName.toLowerCase()
+            rule['value'] === targetSchemaName
           );
         })) {
-          this.addLowercaseTransformRule(schemaName);
+          this.addSchemaRenameRule(sourceSchemaName, targetSchemaName);
         }
-      });
-    }
+      }
+      else if(this._lowercaseTargetSchemaNames && ! this._rules.some((rule:Rule) => {
+        // Add the rule only if it has not been already. 
+        return (
+          rule['rule-action'] === 'rename' && 
+          rule['object-locator']['schema-name'] === sourceSchemaName &&
+          rule['rule-target'] === 'schema' &&
+          rule['value'] === sourceSchemaName.toLowerCase()
+        );
+      })) {
+        this.addLowercaseTransformRule(sourceSchemaName);
+      }
+    });
 
     // Return the rules
     return { rules: this._rules };
@@ -171,12 +192,17 @@ export class TableMapping {
     return JSON.stringify(this.toJSON(), null, 2);
   }
 
-  public static includeTestTables = (testTables: DatabaseTable[] = [], ruleName?: string): TableMapping => {
+  public toFlatString = (): string => {
+    return JSON.stringify(this.toJSON());
+  }
+
+  public static includeTestTables = (parms:TestTablesParms): TableMapping => {
+    let { testTables=[], ruleName, schemaMap=new Map() } = parms;
     if(testTables.length === 0) {
       throw new Error('No test tables provided for TableMapping.includeTestTables()');
     }
     ruleName = ruleName || 'include-test-tables';
-    let mapping = new TableMapping();
+    let mapping = new TableMapping(schemaMap);
     testTables.forEach(table => {
       const { schemaName, tableNames } = table;
       tableNames.forEach(tableName => {
@@ -187,13 +213,23 @@ export class TableMapping {
   }
 }
 
+export type TestTablesParms = {
+  testTables?: DatabaseTable[];
+  ruleName?: string;
+  schemaMap?: Map<string, string>
+}
+
 
 const { argv:args } = process;
 if(args.length > 1 && args[1].replace(/\\/g, '/').endsWith('lib/TableMappings.ts')) {
 
   console.log(new TableMapping().toJSON());
 
-  console.log(TableMapping.includeTestTables([{ schemaName: 'KCOEUS', tableNames: ['DMS_SMOKE_TEST'] }]).toString());
+  const schemaMap = new Map([['KCOEUS', 'kuali_raw'], ['PUBLIC', 'public']]);
+
+  console.log(TableMapping.includeTestTables({
+    schemaMap, testTables: [{ schemaName: 'KCOEUS', tableNames: ['DMS_SMOKE_TEST'] }]
+  }).toString());
 
   console.log(new TableMapping()
     .includeSchema('public', 'IncludePublicSchema')
@@ -203,11 +239,11 @@ if(args.length > 1 && args[1].replace(/\\/g, '/').endsWith('lib/TableMappings.ts
 
   console.log(new TableMapping()
     .includeTable('KCOEUS', 'DMS_SMOKE_TEST')
-    .lowerCaseTargetTableNames().toString());
+    .lowerCaseTargetTableNames()
+    .toString());
 
-  console.log(new TableMapping()
-    .includeSchema('KCOEUS', 'all-kuali-tables')
-    .lowerCaseTargetTableNames().toString());
-
-  
+  console.log(new TableMapping(schemaMap)
+    .includeSchema('KCOEUS', 'all-source-tables')
+    .lowerCaseTargetTableNames()
+    .toString());
 }

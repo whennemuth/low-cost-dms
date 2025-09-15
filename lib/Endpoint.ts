@@ -3,9 +3,34 @@ import { ISecret, Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 
-export type DmsEndpointsProps = {
-  stack: Construct, id: string, context:IContext, targetRdsHost?:string
+export enum DmsEndpointEngineName {
+  oracle = 'oracle',
+  postgres = 'postgres',
+  mysql = 'mysql',
+  sqlserver = 'sqlserver',
+  mariadb = 'mariadb',
+  aurora = 'aurora',
+  aurora_postgresql = 'aurora-postgresql',
+  redshift = 'redshift',
+  s3 = 's3',
+  db2 = 'db2',
+  azuredb = 'azuredb',
+  sybase = 'sybase',
+  dynamodb = 'dynamodb',
+  mongodb = 'mongodb',
+  kinesis = 'kinesis',
+  kafka = 'kafka',
+  elasticsearch = 'elasticsearch',
+  docdb = 'docdb',
+  neptune = 'neptune',
+  opensearch = 'opensearch',
+  redshift_serverless = 'redshift-serverless'
 };
+
+export type DmsEndpointsProps = {
+  stack: Construct, id: string, engineName:DmsEndpointEngineName , context:IContext, targetRdsHost?:string
+};
+
 
 /**
  * Build the DMS source and target endpoints.
@@ -17,24 +42,24 @@ export class DmsEndpoints extends Construct {
   constructor(props: DmsEndpointsProps) {
     super(props.stack, props.id);
 
-    const { context, id, targetRdsHost } = props;
+    const { context, id, engineName, targetRdsHost } = props;
 
     let { 
       stack: { prefix=()=>'undefined' } = {},
-      oracleHost, oraclePort, oracleUser, oraclePassword, oracleSecretName,
-      postgresDbName, postgresHost, postgresPort, postgresSchema, postgresPassword, postgresSecretName
+      sourceDbHost, sourceDbPort, sourceDbUser, sourceDbPassword, sourceDbSecretName,
+      postgresDbName, postgresHost, postgresPort, postgresUser, postgresPassword, postgresSecretName
     } = context;
 
     if(targetRdsHost) {
       postgresHost = targetRdsHost;
     }
 
-    let oracleSecret: ISecret | undefined;
-    const getOracleSecret = (name: string):string => {
-      if( ! oracleSecret) {
-        oracleSecret = Secret.fromSecretNameV2(this, `${prefix()}-${id}-oracle-secret`, oracleSecretName!);
+    let sourceDbSecret: ISecret | undefined;
+    const getSourceDbSecret = (name: string):string => {
+      if( ! sourceDbSecret) {
+        sourceDbSecret = Secret.fromSecretNameV2(this, `${prefix()}-${id}-source-db-secret`, sourceDbSecretName!);
       }
-      return oracleSecret.secretValueFromJson(name).unsafeUnwrap().toString();
+      return sourceDbSecret.secretValueFromJson(name).unsafeUnwrap().toString();
     }
 
     let postgresSecret: ISecret | undefined;
@@ -46,24 +71,26 @@ export class DmsEndpoints extends Construct {
     }
  
     const sourceProps = {
+      endpointIdentifier: `${prefix()}-source-endpoint`,
       endpointType: 'source',
-      engineName: 'oracle',
-      serverName: oracleHost,
-      port: oraclePort,
-      password: oraclePassword || getOracleSecret(oracleUser || 'DMS_USER'),
-      username: oracleUser || 'DMS_USER',
-      databaseName: 'KUALI', // Default Oracle database name, adjust if needed 
+      engineName,
+      serverName: sourceDbHost,
+      port: sourceDbPort,
+      password: sourceDbPassword || getSourceDbSecret(sourceDbUser || 'DMS_USER'),
+      username: sourceDbUser || 'DMS_USER',
+      databaseName: 'KUALI', // Default source database name, adjust if needed 
     } as CfnEndpointProps;
 
     this._sourceEndpoint = new CfnEndpoint(this, `${prefix()}-${id}-source`, sourceProps);
 
     const targetProps = {
+      endpointIdentifier: `${prefix()}-target-endpoint`,
       endpointType: 'target',
-      engineName: 'postgres',
+      engineName: DmsEndpointEngineName.postgres,
       serverName: postgresHost,
       port: postgresPort,
       databaseName: postgresDbName,
-      username: postgresSchema || getPostgresSecret('username'),
+      username: postgresUser || getPostgresSecret('username'),
       password: postgresPassword || getPostgresSecret('password'),
       sslMode: 'require'
     } as CfnEndpointProps;

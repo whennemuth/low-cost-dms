@@ -1,5 +1,4 @@
-import { CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
-import { IpAddresses, IVpc, Peer, Port, SecurityGroup, SubnetSelection, SubnetType, Vpc, VpcProps } from "aws-cdk-lib/aws-ec2";
+import { IpAddresses, IVpc, SecurityGroup, SubnetType, Vpc, VpcProps } from "aws-cdk-lib/aws-ec2";
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 
@@ -10,14 +9,13 @@ export class DmsVpc extends Construct {
   private _vpc:IVpc;
   private _sg:SecurityGroup;
   private _privateSubnetIds:string[] = [];
-  private _publicSubnetIds:string[] = [];
 
   constructor(scope: Construct, id: string, context:IContext) {
     super(scope, id);
 
     let { 
       stack: { prefix=()=>'undefined' } = {}, 
-      oracleVpcId, oracleSubnetIds:privateSubnetIds=[], publicSubnetIds=[]
+      sourceDbVpcId, sourceDbSubnetIds:privateSubnetIds=[]
     } = context;
 
     /**
@@ -42,10 +40,9 @@ export class DmsVpc extends Construct {
     }
     
     // We are using an existing VPC and subnets.
-    if(oracleVpcId) {
-      this._vpc = Vpc.fromLookup(this, `${prefix()}-${id}-vpc`, { vpcId: oracleVpcId });
+    if(sourceDbVpcId) {
+      this._vpc = Vpc.fromLookup(this, `${prefix()}-${id}-vpc`, { vpcId: sourceDbVpcId });
       this.privateSubnetIds.push(...getSubnetIds(privateSubnetIds, SubnetType.PRIVATE_WITH_EGRESS));
-      this.publicSubnetIds.push(...getSubnetIds(publicSubnetIds, SubnetType.PUBLIC));
     }
 
     // We are creating a new VPC and subnets.
@@ -56,18 +53,18 @@ export class DmsVpc extends Construct {
         ipAddresses: IpAddresses.cidr('10.0.0.0/16'),
       } as  VpcProps);
       privateSubnetIds = this._vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS }).subnetIds;
-      publicSubnetIds = this._vpc.selectSubnets({ subnetType: SubnetType.PUBLIC }).subnetIds;
     }
 
     // Create the Security Group
     this._sg = new SecurityGroup(this, `${prefix()}-${id}-sg`, {
+      securityGroupName: `${prefix()}-vpc-sg`,
       vpc: this._vpc,
       description: 'Allow DMS to connect to target PostgreSQL in company network',
     });
 
     // Don't need ingress rules because DMS replication egresses only, and the databases have ingress 
     // that allows access from services that run under this security group
-    // this._sg.addIngressRule(Peer.ipv4(this._vpc.vpcCidrBlock), Port.tcp(oraclePort), `Allow access from VPC on port ${oraclePort}`);
+    // this._sg.addIngressRule(Peer.ipv4(this._vpc.vpcCidrBlock), Port.tcp(sourceDbPort), `Allow access from VPC on port ${sourceDbPort}`);
     // this._sg.addIngressRule(Peer.ipv4(this._vpc.vpcCidrBlock), Port.tcp(postgresPort), `Allow access from VPC on port ${postgresPort}`);
 
     // // Restrict egress to the specified PostgreSQL CIDR
@@ -85,8 +82,5 @@ export class DmsVpc extends Construct {
   }
   public get privateSubnetIds(): string[] {
     return this._privateSubnetIds;
-  }
-  public get publicSubnetIds(): string[] {
-    return this._publicSubnetIds;
   }
 }

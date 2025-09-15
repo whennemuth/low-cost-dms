@@ -1,20 +1,18 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { Stack, StackProps } from 'aws-cdk-lib';
+import { CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
 import { Peer, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from "constructs";
 import { IContext } from "../context/IContext";
 import { DmsEndpoints } from "./Endpoint";
-import { StartReplicationTaskLambdaFunction } from './lambda_old/Lambda';
 import { PostgresTarget } from './PostgresTarget';
 import { VpcRole } from './Role';
-import { DmsRule } from "./Rule";
-import { Tasks } from './Tasks';
+import { Tasks, TaskType } from './Tasks';
 import { DmsVpc } from "./Vpc";
 import { StartStopLambdas } from "./lambda/Lambda";
-import { CfnReplicationSubnetGroup } from "aws-cdk-lib/aws-dms";
 
 
-export type KualiDmsStackProps = StackProps & {
+export type ExtendedStackProps = StackProps & {
   scope: Construct;
   id: string;
   context: IContext;
@@ -24,23 +22,31 @@ export type KualiDmsStackProps = StackProps & {
   rdsSecurityGroupId?: string;
 }
 
-export class KualiDmsStack extends Stack {
-  constructor(props: KualiDmsStackProps) {
-    super(props.scope, props.id, props);
+export class LowCostDmsStack extends Stack {
+  private props: ExtendedStackProps;
 
+  private constructor(props: ExtendedStackProps) {
+    super(props.scope, props.id, props);
+    this.props = props;
+  }
+
+  public static getInstance = async (props: ExtendedStackProps): Promise<LowCostDmsStack> => {
+
+    const dmsStack = new LowCostDmsStack(props);
+    
     // Get the context (contains all app parameters)
-    // const context = this.node.getContext('stack-parms') as IContext;
+    // const context = dmsStack.node.getContext('stack-parms') as IContext;
 
     const { context, 
-      context: { postgresHost, postgresPort, stack: { prefix=()=>'undefined' } = {} }, 
-      createVpcRole, createRdsTarget=false, updateRdsTarget=false, rdsSecurityGroupId 
-    } = props;
+      context: { postgresHost, postgresPort, stack: { prefix=()=>'undefined' } = {}, sourceDbEngineName }, 
+      createVpcRole, createRdsTarget=false, updateRdsTarget=false, rdsSecurityGroupId,
+    } = dmsStack.props;
 
     // Create the VPC role if needed
-    let dmsVpcRole = createVpcRole ? new VpcRole(this, 'vpc-role', context) : undefined;
+    let dmsVpcRole = createVpcRole ? new VpcRole(dmsStack, 'vpc-role', context) : undefined;
 
     // Create or use an existing VPC
-    const dmsVpc = new DmsVpc(this, 'vpc', context);
+    const dmsVpc = new DmsVpc(dmsStack, 'vpc', context);
 
     // Ensure role is created before VPC
     if(dmsVpcRole) dmsVpc.node.addDependency(dmsVpcRole);
@@ -49,11 +55,11 @@ export class KualiDmsStack extends Stack {
     let postgresTarget: PostgresTarget | undefined;
     if(createRdsTarget || updateRdsTarget) {
       // This stack owns the target database, so it is creatable or updatable
-      postgresTarget = new PostgresTarget(this, 'database-target', { dmsVpc, context });
+      postgresTarget = new PostgresTarget(dmsStack, 'database-target', { dmsVpc, context });
     }
     else if(rdsSecurityGroupId) {
       // This stack does not own the target database, but it must be added an ingress rule to its sg for DMS
-      const importedSg = SecurityGroup.fromSecurityGroupId(this, 'imported-target-database-sg', rdsSecurityGroupId);
+      const importedSg = SecurityGroup.fromSecurityGroupId(dmsStack, 'imported-target-database-sg', rdsSecurityGroupId);
       importedSg.addIngressRule(
         Peer.securityGroupId(dmsVpc.sg.securityGroupId),
         Port.tcp(postgresPort),
@@ -69,8 +75,9 @@ export class KualiDmsStack extends Stack {
 
     // Create DMS endpoints
     const dmsEndpoints = new DmsEndpoints({ 
-      stack: this, 
+      stack: dmsStack, 
       id: 'endpoints', 
+      engineName: sourceDbEngineName,
       context, 
       targetRdsHost: postgresTarget?.dbInstanceEndpointAddress 
     });
@@ -82,39 +89,36 @@ export class KualiDmsStack extends Stack {
     if(postgresTarget) dmsEndpoints.node.addDependency(postgresTarget.dbInstance);
 
     // Create the replication subnet group using public subnets
-    const replicationSubnetGroupId = new CfnReplicationSubnetGroup(this, `replication-subnet-group`, {
+    const replicationSubnetGroupId = new CfnReplicationSubnetGroup(dmsStack, `replication-subnet-group`, {
       replicationSubnetGroupDescription: `${prefix()}-subnet-group`,
       replicationSubnetGroupIdentifier: `${prefix()}-subnet-group`,
-      subnetIds: dmsVpc.publicSubnetIds,
+      subnetIds: dmsVpc.privateSubnetIds,
     }).ref;
 
-    // Create tasks with replication instances to run on, or the serverless configuration(s) equivalent.
-    const tasks = new Tasks({ 
-      scope:this, context, dmsVpc, dmsEndpoints, dmsVpcRole, replicationSubnetGroupId 
-    });
-    const { fullLoadConfigArn, fullLoadAndCdcConfigArn, cdcOnlyConfigArn } = tasks;
+    // TESTING: Create some pre-defined tasks with replication instances to run on, and the 
+    // serverless configuration(s) equivalent.
+    if(false) {
+      const tasks = await Tasks.getInstance({ 
+        taskType:TaskType.PROVISIONED, 
+        scope:dmsStack, context, dmsVpc, dmsEndpoints, dmsVpcRole, replicationSubnetGroupId 
+      });
+    }
+
 
     // Add an ingress rule to the source database for the DMS replication service.
-    const { oracleSecurityGroupId:dbSecurityGroupId="", oraclePort } = context;
-    const dbSecurityGroup = SecurityGroup.fromSecurityGroupId(this, 'source-database-sg', dbSecurityGroupId);
+    const { sourceDbSecurityGroupId:dbSecurityGroupId="", sourceDbPort } = context;
+    const dbSecurityGroup = SecurityGroup.fromSecurityGroupId(dmsStack, 'source-database-sg', dbSecurityGroupId);
     dbSecurityGroup.addIngressRule(
       Peer.securityGroupId(dmsVpc.sg.securityGroupId),
-      Port.tcp(oraclePort),
+      Port.tcp(sourceDbPort),
       'Allow DMS replication access'
     );    
 
     const dmsLambdaFunctions = new StartStopLambdas({
-      scope: this, id: 'lambda', context, dmsVpc, dmsEndpoints, replicationSubnetGroupId
+      scope: dmsStack, id: 'lambda', context, dmsVpc, dmsEndpoints, replicationSubnetGroupId
     });
 
-    // // Create a Lambda function that performs "catchup" replication that runs briefly and stops.
-    // const dmsLambdaFunction = new StartReplicationTaskLambdaFunction(this, 'lambda', { 
-    //   context, 
-    //   fullLoadConfigArn, fullLoadAndCdcConfigArn, cdcOnlyConfigArn
-    // });
-
-    // Create an event bridge schedule that triggers the lambda function for "catchup" replication.
-    // const dmsSchedule = new DmsRule({ scope: this, constructId: 'lambda-schedule', context, dmsLambdaFunction });
+    return dmsStack;
   }
 
   public static getName(context: IContext): string|undefined {

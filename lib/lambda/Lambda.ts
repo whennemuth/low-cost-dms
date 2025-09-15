@@ -1,4 +1,4 @@
-import { Duration } from "aws-cdk-lib";
+import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { Effect, PolicyDocument, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { ScheduleGroup } from "aws-cdk-lib/aws-scheduler";
@@ -7,6 +7,7 @@ import { IContext } from "../../context/IContext";
 import { AbstractFunction } from "../AbstractFunction";
 import { DmsEndpoints } from "../Endpoint";
 import { DmsVpc } from "../Vpc";
+import { Cron } from "./Cron";
 
 
 export type StartStopLambdasProps = {
@@ -17,6 +18,9 @@ export type StartStopLambdasProps = {
   dmsEndpoints: DmsEndpoints;
   replicationSubnetGroupId: string;
 };
+
+// Default the replication to run daily at 2am Local time
+export const DEFAULT_DAILY_CRON = Cron.dailyAtHourExpression(2);
 
 export class StartStopLambdas extends Construct {
   private props: StartStopLambdasProps;
@@ -50,7 +54,10 @@ export class StartStopLambdas extends Construct {
   private createEventSchedulerGroup = () => {
     const { props: { context: { stack: { prefix=()=>'undefined' } = {} } } } = this;
     this.scheduleGroupName = `${prefix()}-schedules`;
-    new ScheduleGroup(this, 'schedule-group', { scheduleGroupName: this.scheduleGroupName });
+    new ScheduleGroup(this, 'schedule-group', { 
+      scheduleGroupName: this.scheduleGroupName, 
+      removalPolicy: RemovalPolicy.DESTROY 
+    });
   }
 
   /**
@@ -89,20 +96,22 @@ export class StartStopLambdas extends Construct {
         replicationSubnetGroupId, dmsVpc, dmsEndpoints: { 
           sourceEndpointArn, targetEndpointArn 
         }, context: {
-          stack: { Account, Region, prefix=()=>'undefined' } = {}, scheduleRateHours=24,
-          oracleLargestLobKB, oracleRedoLogRetentionHours, oracleTestTables, oracleSourceSchemas,
-          scheduledRunAbortIfBeyondRedoLogRetention, scheduledRunDurationMinutes, scheduledRunRetryOnFailure,
+          stack: { Account, Region, prefix=()=>'undefined' } = {},
+          sourceDbLargestLobKB, sourceDbTestTables, sourceDbSchemas,
+          scheduledRunRetryOnFailure, replicationScheduleCronExpression, replicationScheduleCronTimezone,
+          durationForFullLoadMinutes, durationForCdcMinutes, sourceDbEngineName,
+          postgresSchema
         },       
       }} = this;
 
     this._startReplicationLambda = new class extends AbstractFunction { }(this, `start-replication-lambda`, {
       runtime: Runtime.NODEJS_18_X,
       memorySize: 256,
-      timeout: Duration.seconds(15),
+      timeout: Duration.minutes(5),
       entry: 'lib/lambda/StartReplicationHandler.ts',
       // handler: 'handler',
       functionName,
-      description: 'Triggers the DMS replication between the source oracle and target postgres databases.',
+      description: 'Triggers the DMS replication between the source RDS and target postgres databases.',
       cleanup: true,
       bundling: {
         externalModules: [
@@ -110,13 +119,27 @@ export class StartStopLambdas extends Construct {
         ]
       },
       role: new Role(this, 'start-replication-task-role', {
+        roleName: `${prefix()}-start-replication-task-role`,
         assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
         description: `Grants actions to the lambda function to perform the related DMS tasks.`,
         inlinePolicies: {
           [`${functionName}-dms-policy`]: new PolicyDocument({
             statements: [
               new PolicyStatement({
-                actions: [ 'dms:CreateReplicationConfig' ],
+                actions: [ 
+                  'dms:CreateReplicationConfig', 
+                  'dms:DeleteReplicationConfig', 
+                  'dms:StartReplication',
+                  'dms:ReloadReplicationTables' 
+                ],
+                resources: [ 
+                  `arn:aws:dms:${Region}:${Account}:replication-config:${prefix()}*`,
+                  `arn:aws:dms:${Region}:${Account}:endpoint:*`
+                ],
+                effect: Effect.ALLOW
+              }),
+              new PolicyStatement({
+                actions: [ 'dms:DescribeReplications', 'dms:DescribeReplicationConfigs', 'dms:List*' ],
                 resources: [ '*' ],
                 effect: Effect.ALLOW
               })
@@ -125,9 +148,14 @@ export class StartStopLambdas extends Construct {
           [`${functionName}-scheduler-policy`]: new PolicyDocument({
             statements: [
               new PolicyStatement({
-                actions: [ 'scheduler:DeleteSchedule' ],
+                actions: ['iam:PassRole'],
+                resources: [`arn:aws:iam::${Account}:role/${prefix()}-scheduler-role`],
+                effect: Effect.ALLOW
+              }),
+              new PolicyStatement({
+                actions: [ 'scheduler:CreateSchedule', 'scheduler:DeleteSchedule' ],
                 resources: [
-                  `arn:aws:scheduler:${Region}:${Account}:schedule/${scheduleGroupName}/start-replication-*`
+                  `arn:aws:scheduler:${Region}:${Account}:schedule/${scheduleGroupName}/${prefix()}-*`
                 ],
                 effect: Effect.ALLOW
               })
@@ -136,29 +164,38 @@ export class StartStopLambdas extends Construct {
         }
       }),
       environment: {
+        PREFIX: `${prefix()}`,
         IGNORE_LAST_ERROR: scheduledRunRetryOnFailure ? 'true' : 'false',
-        SOURCE_DB_REDO_LOG_RETENTION_HOURS: `${oracleRedoLogRetentionHours ?? '0'}`,
-        ABORT_IF_BEYOND_REDO_LOG_RETENTION: scheduledRunAbortIfBeyondRedoLogRetention ? 'true' : 'false',
-        // REPLICATION_DURATION_MINUTES: `${scheduledRunDurationMinutes ?? '45'}`,
         REPLICATION_SUBNET_GROUP_ID: replicationSubnetGroupId,
         REPLICATION_AVAILABILITY_ZONE: dmsVpc.vpc.availabilityZones[0], // Let DMS pick the AZ
-        REPLICATION_SCHEDULE_RATE_HOURS: `${scheduleRateHours}`,
+        REPLICATION_SCHEDULE_CRON_EXPRESSION: `${replicationScheduleCronExpression ?? DEFAULT_DAILY_CRON}`,
+        REPLICATION_SCHEDULE_CRON_TIMEZONE: replicationScheduleCronTimezone ?? 'America/New_York',
+        REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES: `${durationForFullLoadMinutes ?? '120'}`,
+        REPLICATION_DURATION_FOR_CDC_MINUTES: `${durationForCdcMinutes ?? '60'}`,
         VPC_SECURITY_GROUP_ID: dmsVpc.sg.securityGroupId,
+        SOURCE_DB_ENGINE_NAME: sourceDbEngineName,
         SOURCE_ENDPOINT_ARN: sourceEndpointArn,
         TARGET_ENDPOINT_ARN: targetEndpointArn,
-        LARGEST_SOURCE_LOB_KB: `${oracleLargestLobKB}`,
-        SOURCE_TEST_TABLES: JSON.stringify(oracleTestTables),
-        SOURCE_SCHEMAS: JSON.stringify(oracleSourceSchemas),
+        LARGEST_SOURCE_LOB_KB: `${sourceDbLargestLobKB}`,
+        SOURCE_TEST_TABLES: JSON.stringify(sourceDbTestTables),
+        SOURCE_DB_SCHEMAS: JSON.stringify(sourceDbSchemas),
+        POSTGRES_DB_SCHEMA: postgresSchema,
         STOP_REPLICATION_FUNCTION_ARN: `arn:aws:lambda:${Region}:${Account}:function:${stopReplicationFunctionName}`,
-        NEVER_ABORT: 'false',
-        ACTIVE: 'false' // The lambda will abort early if this is not set to 'true'
+        ACTIVE: 'true', // The lambda will abort early if this is not set to 'true'
+        ACCOUNT: `${Account}`,
       }
     });
   }
 
   private createStopReplicationLambda = () => {
     const { scheduleGroupName, startReplicationFunctionName, stopReplicationFunctionName:functionName,
-      props: {context: { stack: { Account, Region, prefix=()=>'undefined' } = {} } } 
+      props: { 
+        context: { 
+          stack: { Account, Region, prefix=()=>'undefined' } = {}, 
+          replicationScheduleCronExpression, replicationScheduleCronTimezone,
+          durationForFullLoadMinutes, durationForCdcMinutes
+        } 
+      } 
     } = this;
 
     this._stopReplicationLambda = new class extends AbstractFunction { }(this, `stop-replication-lambda`, {
@@ -168,7 +205,7 @@ export class StartStopLambdas extends Construct {
       entry: 'lib/lambda/StopReplicationHandler.ts',
       // handler: 'handler',
       functionName,
-      description: 'Stops and deletes the DMS replication between the source oracle and target postgres databases.',
+      description: 'Stops and deletes the DMS replication between the source RDS and target postgres databases.',
       cleanup: true,
       bundling: {
         externalModules: [
@@ -176,13 +213,22 @@ export class StartStopLambdas extends Construct {
         ]
       },
       role: new Role(this, 'stop-replication-task-role', {
+        roleName: `${prefix()}-stop-replication-task-role`,
         assumedBy: new ServicePrincipal('lambda.amazonaws.com'),
         description: `Grants actions to the lambda function to perform the related DMS tasks.`,
         inlinePolicies: {
           'DmsStopReplicationTaskPolicy': new PolicyDocument({
             statements: [
               new PolicyStatement({
-                actions: [ 'dms:StopReplicationTask', 'dms:DescribeReplicationTasks' ],
+                actions: [ 
+                  'dms:DeleteReplicationConfig', 
+                  'dms:StopReplication', 
+                ],
+                resources: [ `arn:aws:dms:${Region}:${Account}:replication-config:${prefix()}*` ],
+                effect: Effect.ALLOW
+              }),
+              new PolicyStatement({
+                actions: [ 'dms:DescribeReplications', 'dms:List*' ],
                 resources: [ '*' ],
                 effect: Effect.ALLOW
               })
@@ -191,9 +237,14 @@ export class StartStopLambdas extends Construct {
           [`${functionName}-scheduler-policy`]: new PolicyDocument({
             statements: [
               new PolicyStatement({
-                actions: [ 'scheduler:DeleteSchedule' ],
+                actions: ['iam:PassRole'],
+                resources: [`arn:aws:iam::${Account}:role/${prefix()}-scheduler-role`],
+                effect: Effect.ALLOW
+              }),
+              new PolicyStatement({
+                actions: [ 'scheduler:DeleteSchedule', 'scheduler:CreateSchedule' ],
                 resources: [
-                  `arn:aws:scheduler:${Region}:${Account}:schedule/${scheduleGroupName}/stop-replication-*`
+                  `arn:aws:scheduler:${Region}:${Account}:schedule/${scheduleGroupName}/${prefix()}-*`
                 ],
                 effect: Effect.ALLOW
               })
@@ -203,7 +254,14 @@ export class StartStopLambdas extends Construct {
       }),
       environment: {
         START_REPLICATION_FUNCTION_ARN: `arn:aws:lambda:${Region}:${Account}:function:${startReplicationFunctionName}`,
-        ACTIVE: 'false' // The lambda will abort early if this is not set to 'true'
+        REPLICATION_SCHEDULE_CRON_EXPRESSION: `${replicationScheduleCronExpression ?? DEFAULT_DAILY_CRON}`,
+        REPLICATION_SCHEDULE_CRON_TIMEZONE: replicationScheduleCronTimezone ?? 'America/New_York',
+        REPLICATION_DURATION_FOR_FULL_LOAD_MINUTES: `${durationForFullLoadMinutes ?? '120'}`,
+        REPLICATION_DURATION_FOR_CDC_MINUTES: `${durationForCdcMinutes ?? '60'}`,
+        IGNORE_LAST_ERROR: 'true', // Always ignore errors when stopping
+        ACTIVE: 'true', // The lambda will abort early if this is not set to 'true',
+        PREFIX: `${prefix()}`,
+        ACCOUNT: `${Account}`,
       }
     });
 

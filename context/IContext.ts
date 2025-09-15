@@ -1,4 +1,5 @@
 import { InstanceSize } from "aws-cdk-lib/aws-ec2";
+import { DmsEndpointEngineName } from "../lib/Endpoint";
 
 export type PostgresInstanceIngress = {
   cidr: string;
@@ -13,26 +14,27 @@ export type DatabaseTable = {
 export interface IContext {
 
   stack?: StackParameters; // Parameters for the CDK stack, including account, region, and tags
-  scheduleRateHours?: number;
+  replicationScheduleCronTimezone?: string; // Timezone for the cron expression, defaults to UTC
+  replicationScheduleCronExpression?: string; // A cron expression for scheduling the replication tasks
   scheduledRunRetryOnFailure?: boolean;
-  scheduledRunAbortIfBeyondRedoLogRetention?: boolean;
-  scheduledRunDurationMinutes?: number;
-  publicSubnetIds?: string[];
+  durationForFullLoadMinutes?: number; // Duration to run a full-load replication before switching to CDC
+  durationForCdcMinutes?: number; // Duration to run a CDC replication before stopping it
   serverless?: boolean; // Whether to use serverless DMS replication instances
 
-  oracleHost: string; // Oracle RDS endpoint
-  oraclePort: number; // Oracle RDS port, typically 1521
-  oracleUser: string; // Oracle RDS username
-  oraclePassword?: string; // Oracle RDS password, ideally from Secrets Manager
-  oracleSecretName?: string; // Optional secrets manager secret name for Oracle credentials
-  oracleSecurityGroupId?: string; // Security group ID for Oracle RDS
-  oracleVpcId?: string; // Optional VPC ID for Oracle RDS, if not using default VPC
-  oracleSubnetIds?: string[]; // Optional subnet IDs for Oracle RDS, if not using default VPC
-  oracleSourceSchemas: string[]; // Optional list of source schemas for Oracle RDS
-  oracleTestTables?: DatabaseTable[]; // Optional list of test tables for Oracle RDS
-  oracleLargestLobKB?: number; // Optional largest LOB size in KB for Oracle RDS
-  oracleRedoLogRetentionHours?: number; // Optional redo log retention period in hours for Oracle RDS
+  sourceDbEngineName: DmsEndpointEngineName; // Source DB engine name
+  sourceDbHost: string; // Source DB RDS endpoint
+  sourceDbPort: number; // Source DB RDS port, typically 1521
+  sourceDbUser: string; // Source DB RDS username
+  sourceDbPassword?: string; // Source DB RDS password, ideally from Secrets Manager
+  sourceDbSecretName?: string; // Optional secrets manager secret name for Source DB credentials
+  sourceDbSecurityGroupId?: string; // Security group ID for Source DB RDS
+  sourceDbVpcId?: string; // Optional VPC ID for Source DB RDS, if not using default VPC
+  sourceDbSubnetIds?: string[]; // Optional subnet IDs for Source DB RDS, if not using default VPC
+  sourceDbSchemas: string[]; // Optional list of source schemas for Source DB RDS
+  sourceDbTestTables?: DatabaseTable[]; // Optional list of test tables for Source DB RDS
+  sourceDbLargestLobKB?: number; // Optional largest LOB size in KB for Source DB RDS
 
+  postgresUser: string;
   postgresDbName: string; // PostgreSQL database name
   postgresHost: string; // PostgreSQL host
   postgresPort: number; // PostgreSQL port, typically 5432

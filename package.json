@@ -1,23 +1,25 @@
 {
-  "name": "kuali-dms",
+  "name": "frugal-dms",
   "version": "0.1.0",
   "bin": {
-    "kuali-dms": "bin/kuali-dms.js"
+    "frugal-dms": "bin/frugal-dms.js"
   },
   "scripts": {
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk",
-    "synth": "cdk synth --all 2>&1 | tee cdk.out/kuali-dms.template.yaml",
+    "synth": "cdk synth --all 2>&1 | tee cdk.out/frugal-dms.template.yaml",
     "deploy": "cdk deploy --all --no-rollback --require-approval never",
     "destroy": "cdk destroy -f --all --no-rollback --require-approval never",
-    "redeploy": "npm run destroy && sleep 60 && npm run deploy"
+    "redeploy": "npm run destroy && sleep 60 && npm run deploy",
+    "full-load": "ts-node bin/start-full-load.ts",
+    "flip": "cat context/context.json > context/context.json.temp && cat context/context.json.bkp > context/context.json && cat context/context.json.temp > context/context.json.bkp && rm -f context/context.json.temp"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "22.7.9",
-    "aws-cdk": "2.1006.0",
+    "aws-cdk": "^2.1029.0",
     "esbuild": "^0.25.6",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.5",
@@ -27,11 +29,13 @@
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.876.0",
     "@aws-sdk/client-database-migration-service": "^3.846.0",
+    "@aws-sdk/client-ec2": "^3.883.0",
     "@aws-sdk/client-iam": "^3.873.0",
     "@aws-sdk/client-rds": "^3.876.0",
     "@aws-sdk/client-scheduler": "^3.883.0",
     "aws-cdk-lib": "^2.214.0",
     "constructs": "^10.0.0",
+    "cron-parser": "^5.4.0",
     "dotenv": "^17.2.0",
     "humanize-duration": "^3.33.0",
     "uuid": "^12.0.0"

@@ -1,3 +1,4 @@
+import exp = require("constants");
 import { humanReadableFromMilliseconds } from "./DurationConverter";
 
 
@@ -10,8 +11,8 @@ export enum PeriodType {
  * date object that represents the point in time reached if one waits for those intervals to pass.
  */
 export class EggTimer {
-  private expirationDate:Date;
-  private milliseconds:number;
+  private _expirationDate:Date;
+  private _milliseconds:number;
 
   /**
    * Factory method for getting an egg timer instance.
@@ -26,37 +27,72 @@ export class EggTimer {
     const millisecondsNow = offsetDate ? offsetDate.getTime() : Date.now();
     const millisecondsDelay = periods * periodType;
     const timer = new EggTimer(new Date(millisecondsNow + millisecondsDelay));
-    timer.milliseconds = periods * periodType;
     return timer;
   }
 
   constructor(expirationDate:Date) {
-    this.expirationDate = expirationDate;
+    this._expirationDate = expirationDate;
+    this._milliseconds = expirationDate.getTime() - Date.now();
   }
 
   /**
    * @returns The date of the timer expiration
    */
-  public getExpirationDate = ():Date => {
-    return this.expirationDate;
+  public get expirationDate ():Date {
+    return this._expirationDate;
+  }
+
+  /**
+   * Cron expressions derived from the expiration date are only accurate to the minute and will be rounded down.
+   * Therefore, it is possible to issue a schedule for a point in time that has already passed. To avoid this, 
+   * the cron will be baseed on a "safe" expiration date that is adjusted forward by one or two minutes it would
+   * result in a cron expression that is in the past or will very soon be.
+   */
+  public get safeExpirationDate ():Date {
+    const { millisecondsToExpire, expirationDate } = this;
+    const now = new Date();
+
+    const expiresWithinTheMinute = ():boolean => {
+      const secondsToExpire = Math.round(millisecondsToExpire / 1000) ;
+      if(secondsToExpire > 60) return false;
+      return secondsToExpire < (60 - now.getSeconds());
+    }
+
+    const expiresInTheNextMinute = ():boolean => {
+      const secondsToExpire = Math.round(millisecondsToExpire / 1000);
+      return (secondsToExpire <= 120) && ! expiresWithinTheMinute();
+    }
+
+    // If the timer expires within the current minute, return the expiration date.
+    if(expiresWithinTheMinute()) {
+      // Extend the expiration date by two minutes.
+      return new Date(expirationDate.getTime() + (PeriodType.MINUTES * 2));
+    }
+
+    if(expiresInTheNextMinute()) {
+      // Extend the expiration date by one minute.
+      return new Date(expirationDate.getTime() + (PeriodType.MINUTES * 1));
+    }
+
+    return expirationDate;
   }
   /**
    * @returns The number of milliseconds to timer expiration
    */
-  public getMilliseconds = ():number => {
-    return this.milliseconds;
+  public get millisecondsToExpire ():number {
+    return this._milliseconds;
   }
 
   /**
    * @returns A cron expression that represents the single point in time (non-recurring) of the expiration date.
    */
   public getCronExpression = ():string => {
-    const { expirationDate:dte} = this;
-    const minutes = dte.getUTCMinutes();
-    const hours = dte.getUTCHours();
-    const dayOfMonth = dte.getUTCDate();
-    const month = dte.getUTCMonth() + 1;  // getUTCMonth() returns 0-based month
-    const year = dte.getUTCFullYear();
+    const { safeExpirationDate } = this;
+    const minutes = safeExpirationDate.getUTCMinutes();
+    const hours = safeExpirationDate.getUTCHours();
+    const dayOfMonth = safeExpirationDate.getUTCDate();
+    const month = safeExpirationDate.getUTCMonth() + 1;  // getUTCMonth() returns 0-based month
+    const year = safeExpirationDate.getUTCFullYear();
     return `cron(${minutes} ${hours} ${dayOfMonth} ${month} ? ${year})`;
   }
 
@@ -90,9 +126,13 @@ export class EggTimer {
 
 
 const { argv:args } = process;
-if(args.length > 2 && args[2].replace(/\\/g, '/').endsWith('lib/lambda/_lib/timer/EggTimer.ts')) {
+if(args.length > 1 && args[1].replace(/\\/g, '/').endsWith('lib/lambda/timer/EggTimer.ts')) {
   const date = EggTimer.fromCronExpression('cron(35 20 8 2 ? 2025)');
   console.log(date);
   const millisecondsRemain = date.getTime() - Date.now();
   console.log(humanReadableFromMilliseconds(millisecondsRemain));
+
+  console.log(EggTimer.getInstanceSetFor(0, PeriodType.SECONDS).getCronExpression());
+
+  console.log(EggTimer.getInstanceSetFor(15, PeriodType.SECONDS).getCronExpression());
 }

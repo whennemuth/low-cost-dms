@@ -1,33 +1,34 @@
 import { InstanceSize } from 'aws-cdk-lib/aws-ec2';
 import { IContext, PostgresInstanceIngress, DatabaseTable, StackParameters } from './IContext';
 import * as ctx from './context.json';
+import { DmsEndpointEngineName } from '../lib/Endpoint';
 
 export class Context implements IContext {
 
   public stack:StackParameters;
   public serverless: boolean;
   public scheduledRunRetryOnFailure?: boolean;
-  public scheduledRunAbortIfBeyondRedoLogRetention?: boolean;
-  public scheduledRunDurationMinutes?: number;
-  public scheduleRateHours?: number;
-  public publicSubnetIds?: string[];
+  public replicationScheduleCronExpression?: string; // A cron expression for scheduling the replication tasks
+  public replicationScheduleCronTimezone?: string; // Timezone for the cron expression, defaults to UTC
+  public durationForFullLoadMinutes?: number; // Duration to run a full-load replication before switching to CDC
+  public durationForCdcMinutes?: number; // Duration to run a CDC replication before stopping it
 
-  /* ----------------- ORACLE SOURCE ----------------- */
+  /* ----------------- SOURCE DATABASE ----------------- */
   // Connection
-  public oracleHost: string;
-  public oraclePort: number;
-  public oracleUser: string;
-  public oraclePassword: string|undefined;
+  public sourceDbHost: string;
+  public sourceDbPort: number;
+  public sourceDbUser: string;
+  public sourceDbPassword: string|undefined;
    // Infrastructure
-  public oracleSecretName?: string;
-  public oracleSecurityGroupId?: string;
-  public oracleVpcId?: string;
-  public oracleSubnetIds?: string[];
-  public oracleRedoLogRetentionHours?: number | undefined;
+  public sourceDbEngineName: DmsEndpointEngineName;
+  public sourceDbSecretName?: string;
+  public sourceDbSecurityGroupId?: string;
+  public sourceDbVpcId?: string;
+  public sourceDbSubnetIds?: string[];
   // Replication configuration
-  public oracleTestTables?: DatabaseTable[];
-  public oracleSourceSchemas: string[];
-  public oracleLargestLobKB?: number;
+  public sourceDbTestTables?: DatabaseTable[];
+  public sourceDbSchemas: string[];
+  public sourceDbLargestLobKB?: number;
 
 /* ----------------- POSTGRES TARGET ----------------- */
   // Connection
@@ -35,6 +36,7 @@ export class Context implements IContext {
   public postgresPort: number;
   public postgresDbName: string;
   public postgresSchema: string;
+  public postgresUser: string;
   public postgresPassword: string|undefined;
   // Infrastructure 
   public postgresSecretName?: string;
@@ -44,54 +46,56 @@ export class Context implements IContext {
   constructor() {
 
     // Passwords from the environment take precedence over context.json
-    const { ORACLE_PSWD, PG_PSWD } = process.env;
+    const { SOURCE_PSWD, PG_PSWD } = process.env;
 
 
     // Fallback to context.json values
     const context:IContext = <IContext>ctx;
     const {
       stack: { Id, Account, Region, Tags: { Service, Function, Landscape } = {} } = {},
-      oracleHost, oraclePort, oracleUser, oraclePassword, oracleSecretName, oracleSecurityGroupId,
-      oracleVpcId, oracleSubnetIds, oracleTestTables, oracleSourceSchemas, oracleLargestLobKB, 
-      oracleRedoLogRetentionHours, scheduledRunAbortIfBeyondRedoLogRetention, scheduledRunDurationMinutes,
+      sourceDbHost, sourceDbPort, sourceDbUser, sourceDbPassword, sourceDbSecretName, sourceDbSecurityGroupId,
+      sourceDbVpcId, sourceDbSubnetIds, sourceDbTestTables, sourceDbSchemas, sourceDbLargestLobKB,
+      sourceDbEngineName,
 
-      postgresDbName, postgresHost, postgresPort, postgresSchema, postgresPassword, 
-      postgresSecretName, postgresInstanceSize, postgresInstanceIngress, publicSubnetIds,
+      postgresDbName, postgresHost, postgresPort, postgresSchema, postgresUser, postgresPassword, 
+      postgresSecretName, postgresInstanceSize, postgresInstanceIngress,
 
-      scheduleRateHours, scheduledRunRetryOnFailure=true, serverless=true
+      replicationScheduleCronExpression, replicationScheduleCronTimezone, scheduledRunRetryOnFailure=true, serverless=true,
+      durationForFullLoadMinutes, durationForCdcMinutes
     } = context;
 
     this.stack = { Id, Account, Region, Tags: { Service, Function, Landscape }, prefix: () => {
       return `${Id}-${Landscape}`;
     }} as StackParameters;
 
-    this.oracleHost = oracleHost;
-    this.oraclePort = oraclePort;
-    this.oracleUser = oracleUser;
-    this.oraclePassword = oraclePassword || ORACLE_PSWD;
-    this.oracleSecretName = oracleSecretName;
-    this.oracleSecurityGroupId = oracleSecurityGroupId;
-    this.oracleVpcId = oracleVpcId;
-    this.oracleSubnetIds = oracleSubnetIds;
-    this.oracleTestTables = oracleTestTables;
-    this.oracleSourceSchemas = oracleSourceSchemas;
-    this.oracleLargestLobKB = oracleLargestLobKB;
-    this.oracleRedoLogRetentionHours = oracleRedoLogRetentionHours;
+    this.sourceDbEngineName = sourceDbEngineName;
+    this.sourceDbHost = sourceDbHost;
+    this.sourceDbPort = sourceDbPort;
+    this.sourceDbUser = sourceDbUser;
+    this.sourceDbPassword = sourceDbPassword || SOURCE_PSWD;
+    this.sourceDbSecretName = sourceDbSecretName;
+    this.sourceDbSecurityGroupId = sourceDbSecurityGroupId;
+    this.sourceDbVpcId = sourceDbVpcId;
+    this.sourceDbSubnetIds = sourceDbSubnetIds;
+    this.sourceDbTestTables = sourceDbTestTables;
+    this.sourceDbSchemas = sourceDbSchemas;
+    this.sourceDbLargestLobKB = sourceDbLargestLobKB;
 
     this.postgresDbName = postgresDbName;
     this.postgresHost = postgresHost;
     this.postgresPort = postgresPort;
     this.postgresSchema = postgresSchema;
+    this.postgresUser = postgresUser;
     this.postgresPassword = postgresPassword || PG_PSWD;
     this.postgresSecretName = postgresSecretName;
     this.postgresInstanceSize = postgresInstanceSize;
     this.postgresInstanceIngress = postgresInstanceIngress;
 
     this.serverless = serverless;
-    this.scheduleRateHours = scheduleRateHours;
+    this.replicationScheduleCronExpression = replicationScheduleCronExpression;
+    this.replicationScheduleCronTimezone = replicationScheduleCronTimezone;
     this.scheduledRunRetryOnFailure = scheduledRunRetryOnFailure;
-    this.scheduledRunAbortIfBeyondRedoLogRetention = scheduledRunAbortIfBeyondRedoLogRetention;
-    this.scheduledRunDurationMinutes = scheduledRunDurationMinutes;
-    this.publicSubnetIds = publicSubnetIds;
+    this.durationForFullLoadMinutes = durationForFullLoadMinutes;
+    this.durationForCdcMinutes = durationForCdcMinutes;
   }
 }

@@ -6,11 +6,10 @@ The purpose of most properties is evident in the name. However, supplementary ex
 
 - **stack.Tags:** All resources created will automatically be tagged with the 3 tags set here.
 - **scheduleRateHours:** In an effort to reduce costs, CDC will not be left running, but will only be re-engaged at a set interval and stop after a specific period of time. This is performed by a lambda function triggered by an eventbridge rule configured with this interval setting.
-- **oracleSubnetIds:** The IDs of subnets that the source Oracle database operates in.
-- **postgresInstanceSize:** It is assumed that you are testing and want to create a PostGres RDS database in the same subnet as the source Oracle database to simplify connectivity and network access. This setting is optional, but if set, will trigger the creation of a small RDS instance for PostGres.
+- **sourceDbSubnetIds:** The IDs of subnets that the source database operates in.
+- **postgresInstanceSize:** It is assumed that you are testing and want to create a PostGres RDS database in the same subnet as the source database to simplify connectivity and network access. This setting is optional, but if set, will trigger the creation of a small RDS instance for PostGres.
 - **postgresInstanceIngress:** Comes into play if **postgresInstanceSize** is set. The items in this listing are used to configure the ingress rules for the target PostGres database.
 - **postgresPassword:** The password for the target PostGres database. Can only be used if the PostGres database is NOT hosted by the RDS service *(ie: resides on campus)*. Nonetheless, use of this property is discouraged in favor of secrets manager, and is only intended if your PostGres database is being hosted on your machine *(localhost)*.
-- **publicSubnetIds:** Comes into play if **postgressInstanceSize** is set. These are the subnets that the DMS replication will operate in. 
   IMPORTANT: These must be public subnets (have routes to an internet gateway), else the DMS service will not be able to communicate with secrets manager to acquire database passwords.
 
 **Example config:**
@@ -33,17 +32,13 @@ The purpose of most properties is evident in the name. However, supplementary ex
   	"subnet-03034a40da92d6d08"
   ],
   
-  "oracleHost": "stg.db.kualitest.research.bu.edu",
-  "oraclePort": 1521,
-  "oracleUser": "DMS_USER",
-  "oraclePassword": "",
-  "oracleSecretName": "kuali/stg/kuali-oracle-rds-app-password",
-  "oracleSecurityGroupId": "sg-0b8b04f9cf045f812",
-  "oracleVpcId": "vpc-0290de1785982a52f",
-  "oracleSubnetIds": [
-    "subnet-0d4acd358fba71d20",
-    "subnet-08afdf870ee85d511"
-  ],
+  "sourceDbHost": "stg.db.kualitest.research.bu.edu",
+  "sourceDbPort": 1521,
+  "sourceDbUser": "DMS_USER",
+  "sourceDbPassword": "",
+  "sourceDbSecretName": "kuali/stg/kuali-oracle-rds-app-password",
+  "sourceDbSecurityGroupId": "sg-0b8b04f9cf045f812",
+  "sourceDbVpcId": "vpc-0290de1785982a52f",
 
   "postgresPort": 5432,
   "postgresDbName": "kuali_db",
